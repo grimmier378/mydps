@@ -68,20 +68,20 @@ There is a Battle History window you can toggle to show your past battle reports
   * Otherwise Timespan is since the last time reported.
 
 ```
-[MyDPS] Char: CHARNAME, DPS (NO DS): 31.63, TimeSpan: 2.57 min, Total Damage: 4871, Total Attempts: 29, Average: 167
-[MyDPS] Char: CHARNAME, DPS (DS Dmg): 5.82, TimeSpan: 2.57 min, Total Damage: 896, Total Hits: 13
-[MyDPS] Char: CHARNAME, DPS (ALL): 37.45, TimeSpan: 2.57 min, Total Damage: 5767, Total Attempts: 42, Average: 137
+[MyDPS] DPS (NO DS): 31.63, TimeSpan: 2.57 min, Total Damage: 4871, Total Attempts: 29, Average: 167
+[MyDPS] DPS (DS Dmg): 5.82, TimeSpan: 2.57 min, Total Damage: 896, Total Hits: 13
+[MyDPS] DPS (ALL): 37.45, TimeSpan: 2.57 min, Total Damage: 5767, Total Attempts: 42, Average: 137
 ```
 
 * Battle Based Reportting if enabled will start recording when you enter COMBAT and report when the fighting is over.
 * ```/mydps battlereport``` will output the table of battles to console.
 
 ### Normal Combat Report (after a battle)
-```[MyDPS] Char: CHARNAME, DPS (BATTLE): 182.31, TimeSpan: 29 sec, Total Damage: 5287```
+```[MyDPS] DPS (BATTLE): 182.31, TimeSpan: 29 sec, Total Damage: 5287```
 
 ### Battle History Report (console)
 ```
-[MyDPS] Char: CHARNAME, Battle: 1, DPS: 118.08, Duration: 12 sec, Total Damage: 1417
-[MyDPS] Char: CHARNAME, Battle: 2, DPS: 199.40, Duration: 20 sec, Total Damage: 3988
-[MyDPS] Char: CHARNAME, Battle: 3, DPS: 137.08, Duration: 36 sec, Total Damage: 4935
+[MyDPS] Battle: 1, DPS: 118.08, Duration: 12 sec, Total Damage: 1417
+[MyDPS] Battle: 2, DPS: 199.40, Duration: 20 sec, Total Damage: 3988
+[MyDPS] Battle: 3, DPS: 137.08, Duration: 36 sec, Total Damage: 4935
 ```
