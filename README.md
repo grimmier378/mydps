@@ -1,4 +1,5 @@
 # MyDPS
+
 by Grimmier
 
 ## Scrolling Combat window for MacroQuest.
@@ -42,13 +43,15 @@ Once you Press the Start button, the Window will change backgrounds and become c
 * ```/mydps showtype``` - Show the type of attack.
 * ```/mydps showtarget``` - Show the target of the attack.
 * ```/mydps showds``` - Show damage shield.
+* ```/mydps history``` - Show the battle history window.
 * ```/mydps mymisses``` - Show my misses.
 * ```/mydps missed-me``` - Show NPC missed me.
 * ```/mydps hitme``` - Show NPC hit me.
 * ```/mydps sort``` - Sort newest on top.
 * ```/mydps settings``` - Show current settings.
-* ```/mydps doreporting [all|battle|time]``` - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.
+* ```/mydps doreporting [all|battle|time] ``` - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.
 * ```/mydps report``` - Report the Time Based DPS since Last Report.
+* ```/mydps battlereport``` - Report the battle history to console.
 * ```/mydps move``` - Toggle click through, allows moving of window.
 * ```/mydps delay #``` - Set the display time in seconds.
 * ```/mydps help``` - Show this help.
@@ -66,5 +69,14 @@ Once you Press the Start button, the Window will change backgrounds and become c
 ```
 
 * Battle Based Reportting if enabled will start recording when you enter COMBAT and report when the fighting is over.
+* ```/mydps battlereport``` will output the table of battles to console.
 
+### Normal Combat Report (after a battle)
 ```[MyDPS] DPS (BATTLE): 182.31, TimeSpan: 29 sec, Total Damage: 5287```
+
+### Battle History Report (console)
+```
+[MyDPS] Battle: 1, DPS: 118.08, Duration: 12 sec, Total Damage: 1417
+[MyDPS] Battle: 2, DPS: 199.40, Duration: 20 sec, Total Damage: 3988
+[MyDPS] Battle: 3, DPS: 137.08, Duration: 36 sec, Total Damage: 4935
+```
