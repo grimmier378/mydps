@@ -13,7 +13,10 @@ local tableSize = 0
 local sequenceCounter = 0
 local dpsStartTime = os.time()
 local previewBG = false
-local dmgTotal, dmgCounter, dsCounter, dmgTotalDS = 0, 0, 0, 0
+local dmgTotal, dmgCounter, dsCounter, dmgTotalDS, dmgTotalCombat = 0, 0, 0, 0, 0
+local workingTable = {}
+local enteredCombat = false
+local combatStartTime = 0
 
 local defaults = {
 	Options = {
@@ -27,24 +30,26 @@ local defaults = {
 		displayTime = 10,
 		fontScale = 1.5,
 		bgColor = {0, 0, 0, 0.5},
-		dpsReportTimer = 60,
-		dpsReport = true,
+		dpsTimeSpanReportTimer = 60,
+		dpsTimeSpanReport = true,
+		dpsBattleReport = true,
 	},
 	MeleeColors = {
-		["crush"] = { 1, 0, 0, 1},
-		["kick"] = {0,  1,0,1},
-		["bite"] = { 0, 0,1, 1},
-		["bash"] = {1,1,0,1},
-		["hit"] = {1,0,1, 1},
-		["pierce"] = {0,1,1, 1},
-		["backstabs"] = {1,1,1,1},
-		["slash"] = { 0.8, 0.8, 0, 1 },
-		["miss"] = { 1, 1, 1, 1},
-		["missedMe"] = {1,0,1,1},
-		["non-melee"] = {1,1,1,1},
-		["gothit"] = {1,0,0,1},
+		["crush"] = { 1, 1, 1, 1},
+		["kick"] = { 1, 1, 1, 1},
+		["bite"] = { 1, 1, 1, 1},
+		["bash"] = { 1, 1, 1, 1},
+		["hit"] = { 1, 1, 1, 1},
+		["pierce"] = { 1, 1, 1, 1},
+		["backstab"] = {1,0,0,1},
+		["slash"] = { 1, 1, 1, 1},
+		["miss"] = { 0.5, 0.5, 0.5, 1},
+		["missed-me"] = { 0.5, 0.5, 0.5, 1},
+		["non-melee"] = {0,1,1,1},
+		["hit-by"] = {1,0,0,1},
 		["crit"] = {1,1,0,1},
-		["YOU-non-melee"] = {1,1,0,1},
+		["hit-by-non-melee"] = {1,1,0,1},
+		["gothit-non-melee"] = {1,1,0,1},
 		["dShield"] = {0,1,0,1},
 	}
 }
@@ -103,16 +108,16 @@ end
 
 local function npcMeleeCallBack(line, dType, target, dmg)
 	if not tonumber(dmg) then
-		type = 'missedMe'
+		type = 'missed-me'
 		dmg = 'MISSED'
 	else
-		type = 'gothit'
+		type = 'hit-by'
 		local startType, stopType = string.find(line, "(%w+) YOU")
 		target = string.sub(line, 1, startType - 2)
 	end
 	if target == nil then return end
-	if not settings.Options.showMissMe and type == 'missedMe' then return end
-	if not settings.Options.showHitMe and type == 'gothit' then return end
+	if not settings.Options.showMissMe and type == 'missed-me' then return end
+	if not settings.Options.showHitMe and type == 'hit-by' then return end
 	if damTable == nil then damTable = {} end
 	sequenceCounter = sequenceCounter + 1
 	table.insert(damTable, {type = type, target = target, damage = dmg,
@@ -124,7 +129,7 @@ end
 local function nonMeleeClallBack(line, target, dmg)
 	if not tonumber(dmg) then return end
 	local type = "non-melee"
-	if target == nil then target = 'YOU' type = "YOU-non-melee" end
+	if target == nil then target = 'YOU' type = "hit-by-non-melee" end
 
 	if string.find(line, "was hit") then
 		target = string.sub(line, 1, string.find(line, "was") - 2)
@@ -134,9 +139,15 @@ local function nonMeleeClallBack(line, target, dmg)
 	if type ~= 'dShield' then
 		dmgTotal = dmgTotal + (tonumber(dmg) or 0)
 		dmgCounter = dmgCounter + 1
+		if enteredCombat then
+			dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+		end
 	else
 		dmgTotalDS = dmgTotalDS + (tonumber(dmg) or 0)
 		dsCounter = dsCounter + 1
+		if enteredCombat then
+			dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+		end
 	end
 
 	if not settings.Options.showDS and type == 'dShield' then return end
@@ -160,6 +171,9 @@ local function meleeCallBack(line, dType, target, dmg)
 
 	dmgTotal = dmgTotal + (tonumber(dmg) or 0)
 	dmgCounter = dmgCounter + 1
+	if enteredCombat then
+		dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+	end
 
 	if not settings.Options.showMyMisses and type == 'miss' then return end
 
@@ -178,6 +192,9 @@ local function critalCallBack(line, dmg)
 
 	dmgTotal = dmgTotal + (tonumber(dmg) or 0)
 	dmgCounter = dmgCounter + 1
+	if enteredCombat then
+		dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+	end
 
 	if damTable == nil then damTable = {} end
 	sequenceCounter = sequenceCounter + 1
@@ -212,8 +229,6 @@ local function checkColor(t)
 		return {1, 1, 1, 1}
 	end
 end
-
-local workingTable = {}
 
 local function Draw_GUI()
 	ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
@@ -259,13 +274,13 @@ local function Draw_GUI()
 				settings.Options.showMissMe = ImGui.Checkbox("Show Missed Me", settings.Options.showMissMe)
 				settings.Options.showHitMe = ImGui.Checkbox("Show Hit Me", settings.Options.showHitMe)
 				settings.Options.showDS = ImGui.Checkbox("Show Damage Shield", settings.Options.showDS)
-				settings.Options.dpsReport = ImGui.Checkbox("Show DPS Report", settings.Options.dpsReport)
-				local tmpTimer = settings.Options.dpsReportTimer / 60
-
+				settings.Options.dpsTimeSpanReport = ImGui.Checkbox("Do DPS over Time Reporting", settings.Options.dpsTimeSpanReport)
+				settings.Options.dpsBattleReport = ImGui.Checkbox("Do DPS Battle Reporting", settings.Options.dpsBattleReport)
+				local tmpTimer = settings.Options.dpsTimeSpanReportTimer / 60
 				ImGui.SetNextItemWidth(100)
 				tmpTimer = ImGui.SliderFloat("DPS Report Timer (minutes)", tmpTimer, 0.5, 60, "%.2f")
-				if tmpTimer ~= settings.Options.dpsReportTimer then
-					settings.Options.dpsReportTimer = tmpTimer * 60
+				if tmpTimer ~= settings.Options.dpsTimeSpanReportTimer then
+					settings.Options.dpsTimeSpanReportTimer = tmpTimer * 60
 				end
 			end
 
@@ -311,6 +326,8 @@ end
 
 local function pHelp()
 	printf("\aw[\at%s\ax] \ayCommands\ax", script)
+	printf("\aw[\at%s\ax] \ay/lua run mydps - Run the script.", script)
+	printf("\aw[\at%s\ax] \ay/lua run mydps start\ax - Run and Start, bypassing the Options Display.", script)
 	printf("\aw[\at%s\ax] \ay/mydps start\ax - Start the DPS window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps exit\ax - Exit the script.", script)
 	printf("\aw[\at%s\ax] \ay/mydps ui\ax - Show the UI.", script)
@@ -319,12 +336,12 @@ local function pHelp()
 	printf("\aw[\at%s\ax] \ay/mydps showtarget\ax - Show the target of the attack.", script)
 	printf("\aw[\at%s\ax] \ay/mydps showds\ax - Show damage shield.", script)
 	printf("\aw[\at%s\ax] \ay/mydps mymisses\ax - Show my misses.", script)
-	printf("\aw[\at%s\ax] \ay/mydps missedme\ax - Show NPC missed me.", script)
+	printf("\aw[\at%s\ax] \ay/mydps missed-me\ax - Show NPC missed me.", script)
 	printf("\aw[\at%s\ax] \ay/mydps hitme\ax - Show NPC hit me.", script)
 	printf("\aw[\at%s\ax] \ay/mydps sort\ax - Sort newest on top.", script)
 	printf("\aw[\at%s\ax] \ay/mydps settings\ax - Show current settings.", script)
-	printf("\aw[\at%s\ax] \ay/mydps dodps\ax - Toggle DPS Auto Reporting.", script)
-	printf("\aw[\at%s\ax] \ay/mydps report\ax - Report the current DPS since Last Report.", script)
+	printf("\aw[\at%s\ax] \ay/mydps doreporting [\agall\ax|\agbattle\ax|\agtime\ax]\ax  - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.", script)
+	printf("\aw[\at%s\ax] \ay/mydps report\ax - Report the Time Based DPS since Last Report.", script)
 	printf("\aw[\at%s\ax] \ay/mydps move\ax - Toggle click through, allows moving of window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps delay #\ax - Set the display time in seconds.", script)
 	printf("\aw[\at%s\ax] \ay/mydps help\ax - Show this help.", script)
@@ -340,25 +357,37 @@ local function pCurrentSettings()
 	end
 end
 
-local function pDPS(dur)
-	local dps = dur > 0 and (dmgTotal / dur) or 0
-	local dpsDS = dur > 0 and (dmgTotalDS / dur) or 0
-	local avgDmg = dmgCounter > 0 and (dmgTotal / dmgCounter) or 0
-	local grandTotal = dmgTotal + dmgTotalDS
-	local grandCounter = dmgCounter + dsCounter
-	local grangAvg = grandCounter > 0 and (grandTotal / grandCounter) or 0
-	local grandDPS = dur > 0 and (grandTotal / dur) or 0
-	printf("\aw[\at%s\ax] \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
-			script, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
-	printf("\aw[\at%s\ax] \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
-		script, dpsDS, (dur/60), dmgTotalDS, dsCounter)
-	printf("\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
-		script, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
-	dmgTotal = 0
-	dmgCounter = 0
-	dmgTotalDS = 0
-	dsCounter = 0
-	dpsStartTime = os.time()
+local function pDPS(dur, tType)
+	if tType == nil then tType = "ALL" end
+	if tType ~= 'COMBAT' and  tType ~= 'ALL' then return end
+	if tType == 'All' then
+		if dmgTotal == 0 and dmgTotalDS == 0 then return end
+		local dps = dur > 0 and (dmgTotal / dur) or 0
+		local dpsDS = dur > 0 and (dmgTotalDS / dur) or 0
+		local avgDmg = dmgCounter > 0 and (dmgTotal / dmgCounter) or 0
+		local grandTotal = dmgTotal + dmgTotalDS
+		local grandCounter = dmgCounter + dsCounter
+		local grangAvg = grandCounter > 0 and (grandTotal / grandCounter) or 0
+		local grandDPS = dur > 0 and (grandTotal / dur) or 0
+		printf("\aw[\at%s\ax] \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
+				script, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
+		printf("\aw[\at%s\ax] \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
+			script, dpsDS, (dur/60), dmgTotalDS, dsCounter)
+		printf("\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
+			script, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
+		dmgTotal = 0
+		dmgCounter = 0
+		dmgTotalDS = 0
+		dsCounter = 0
+		dpsStartTime = os.time()
+	elseif tType == 'COMBAT' then
+		if dmgTotalCombat == 0 then return end
+		local dps = dur > 0 and (dmgTotalCombat / dur) or 0
+		local avgDmg = dmgCounter > 0 and (dmgTotalCombat / dmgCounter) or 0
+		printf("\aw[\at%s\ax] \ayDPS \ax(\aoBATTLE\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax",
+				script, dps, (dur), dmgTotalCombat)
+		dmgTotalCombat = 0
+	end
 end
 
 local function processCommand(...)
@@ -396,7 +425,7 @@ local function processCommand(...)
 	elseif cmd == 'mymisses' then
 		settings.Options.showMyMisses = not settings.Options.showMyMisses
 		printf("\aw[\at%s\ax] \ayShow My Misses set to %s\ax", script, settings.Options.showMyMisses)
-	elseif cmd == 'missedme' then
+	elseif cmd == 'missed-me' then
 		settings.Options.showMissMe = not settings.Options.showMissMe
 		printf("\aw[\at%s\ax] \ayShow Missed Me set to %s\ax", script, settings.Options.showMissMe)
 	elseif cmd == 'hitme' then
@@ -410,9 +439,20 @@ local function processCommand(...)
 		printf("\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough)
 	elseif cmd == 'settings' then
 		pCurrentSettings()
-	elseif cmd == 'dodps' then
-		settings.Options.dpsReport = not settings.Options.dpsReport
-		printf("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, settings.Options.dpsReport)
+	elseif #args == 2 and cmd == 'doreporting' then
+		if args[2] == 'battle' then
+			settings.Options.dpsBattleReport = not settings.Options.dpsBattleReport
+			printf("\aw[\at%s\ax] \ayDo DPS Battle Reporting set to %s\ax", script, settings.Options.dpsBattleReport)
+		elseif args[2] == 'time' then
+			settings.Options.dpsTimeSpanReport = not settings.Options.dpsTimeSpanReport
+			printf("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, settings.Options.dpsTimeSpanReport)
+		elseif args[2] == 'all' then
+			settings.Options.dpsBattleReport = not settings.Options.dpsBattleReport
+			settings.Options.dpsTimeSpanReport = settings.Options.dpsBattleReport
+			printf("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, settings.Options.dpsTimeSpanReport)
+		else
+			printf("\aw[\at%s\ax] \arInvalid argument, \ayType \at/mydps doreporting\ax takes arguments \aw[\agall\aw|\agbattle\aw|\agtime\aw] \ayplease try again.", script)
+		end
 	elseif cmd == 'report' then
 		pDPS(os.time() - dpsStartTime)
 	elseif #args == 2 and cmd == "delay" then
@@ -430,6 +470,7 @@ local function processCommand(...)
 	mq.pickle(configFile, settings)
 end
 
+local args = {...}
 local function Init()
 
 	--[[
@@ -461,6 +502,7 @@ local function Init()
 		#1# hit #2# for #3# points of non-melee damage.
 		You were hit by non-melee for %1 damage.
 		#2# was hit by non-melee for #3# points of damage
+		#1# scores a Deadly Strike!(#2#)
 	]]
 	-- Register Events
 	loadSettings()
@@ -469,6 +511,8 @@ local function Init()
 	mq.event("melee_crit", "#*#You score a critical hit! #*#(#1#)", critalCallBack )
 	mq.event("melee_crit2", "#*#You deliver a critical blast! #*#(#1#)", critalCallBack )
 	mq.event("melee_crit3", str, critalCallBack )
+	str = string.format("#*#%s scores a Deadly Strike! #*#(#1#)", MyName)
+	mq.event("melee_deadly_strike", str, critalCallBack )
 	str = string.format("#*#%s hit #1# for #2# points of non-melee damage#*#", MyName)
 	mq.event("melee_non_melee", str , nonMeleeClallBack)
 	mq.event("melee_damage_shield", "#*# was hit by non-melee for #2# points of damage#*#", nonMeleeClallBack)
@@ -481,7 +525,12 @@ local function Init()
 	-- Initialize ImGui
 	mq.imgui.init(script, Draw_GUI)
 	pHelp()
-
+	if args[1] ~= nil and args[1] == "start" then
+		started = true
+		clickThrough = true
+		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
+		printf("\aw[\at%s\ax] \ayStarted\ax", script)
+	end
 end
 
 local function Loop()
@@ -499,10 +548,19 @@ local function Loop()
 		end
 
 		local currentTime = os.time()
-		if currentTime - dpsStartTime >= settings.Options.dpsReportTimer then
-			if settings.Options.dpsReport then pDPS(currentTime - dpsStartTime) end
+		if currentTime - dpsStartTime >= settings.Options.dpsTimeSpanReportTimer then
+			if settings.Options.dpsTimeSpanReport then pDPS(currentTime - dpsStartTime) end
 		end
 
+		if mq.TLO.Me.CombatState() == 'COMBAT' and not enteredCombat then
+			enteredCombat = true
+			combatStartTime = os.time()
+		elseif mq.TLO.Me.CombatState() ~= 'COMBAT' and enteredCombat then
+			enteredCombat = false
+			local combatTime = os.time() - combatStartTime
+			if settings.Options.dpsBattleReport then pDPS(combatTime, "COMBAT") end
+			combatStartTime = 0
+		end
 		-- Clean up the table
 		cleanTable()
 		workingTable = sortTable(damTable)
