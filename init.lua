@@ -4,6 +4,7 @@ local script = 'MyDPS'
 local configFile = string.format("%s/MyUI/%s/%s/%s.lua", mq.configDir, script, mq.TLO.EverQuest.Server(), mq.TLO.Me.Name())
 local RUNNING = true
 local damTable, settings = {}, {}
+local MyName = mq.TLO.Me.CleanName()
 local winFlags = bit32.bor(ImGuiWindowFlags.None,
 		ImGuiWindowFlags.NoTitleBar)
 local started = false
@@ -33,6 +34,7 @@ local defaults = {
 		dpsTimeSpanReportTimer = 60,
 		dpsTimeSpanReport = true,
 		dpsBattleReport = true,
+		announceDNET = false,
 	},
 	MeleeColors = {
 		["crush"] = { 1, 1, 1, 1},
@@ -279,6 +281,7 @@ local function Draw_GUI()
 					settings.Options.dpsTimeSpanReport = ImGui.Checkbox("Do DPS over Time Reporting", settings.Options.dpsTimeSpanReport)
 					settings.Options.dpsBattleReport = ImGui.Checkbox("Do DPS Battle Reporting", settings.Options.dpsBattleReport)
 					showBattles = ImGui.Checkbox("Show Battle History", showBattles)
+					settings.Options.announceDNET = ImGui.Checkbox("Announce to DanNet Group", settings.Options.announceDNET)
 					local tmpTimer = settings.Options.dpsTimeSpanReportTimer / 60
 					ImGui.SetNextItemWidth(100)
 					tmpTimer = ImGui.SliderFloat("DPS Report Timer (minutes)", tmpTimer, 0.5, 60, "%.2f")
@@ -337,7 +340,7 @@ local function Draw_GUI()
 		if showReport then
 			ImGui.SetWindowFontScale(fontScale)
 			if #battlesHistory > 0 then
-				if ImGui.BeginTable("Battles", 4, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable)) then
+				if ImGui.BeginTable("Battles", 4, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable)) then
 					ImGui.TableSetupColumn("Battle", ImGuiTableColumnFlags.None)
 					ImGui.TableSetupColumn("DPS", ImGuiTableColumnFlags.None)
 					ImGui.TableSetupColumn("Duration", ImGuiTableColumnFlags.None)
@@ -383,6 +386,7 @@ local function pHelp()
 	printf("\aw[\at%s\ax] \ay/mydps doreporting [\agall\ax|\agbattle\ax|\agtime\ax]\ax  - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.", script)
 	printf("\aw[\at%s\ax] \ay/mydps report\ax - Report the Time Based DPS since Last Report.", script)
 	printf("\aw[\at%s\ax] \ay/mydps battlereport\ax - Report the battle history to console.", script)
+	printf("\aw[\at%s\ax] \ay/mydps announce\ax - Toggle Announce to DanNet Group.", script)
 	printf("\aw[\at%s\ax] \ay/mydps move\ax - Toggle click through, allows moving of window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps delay #\ax - Set the display time in seconds.", script)
 	printf("\aw[\at%s\ax] \ay/mydps help\ax - Show this help.", script)
@@ -398,6 +402,12 @@ local function pCurrentSettings()
 	end
 end
 
+local function announceDanNet(msg)
+	if settings.Options.announceDNET then
+		mq.cmdf("/squelch /dgt %s", msg)
+	end
+end
+
 local function pDPS(dur, tType)
 	if tType == nil then tType = "ALL" end
 	if tType ~= 'COMBAT' and  tType ~= 'ALL' then return end
@@ -410,12 +420,20 @@ local function pDPS(dur, tType)
 		local grandCounter = dmgCounter + dsCounter
 		local grangAvg = grandCounter > 0 and (grandTotal / grandCounter) or 0
 		local grandDPS = dur > 0 and (grandTotal / dur) or 0
-		printf("\aw[\at%s\ax] \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
-				script, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
-		printf("\aw[\at%s\ax] \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
-			script, dpsDS, (dur/60), dmgTotalDS, dsCounter)
-		printf("\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
-			script, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
+		local msgNoDS = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
+				script, MyName, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
+		local msgDS = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
+			script, MyName, dpsDS, (dur/60), dmgTotalDS, dsCounter)
+		local msgALL = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
+			script, MyName, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
+		printf(msgNoDS)
+		printf(msgDS)
+		printf(msgALL)
+		if settings.Options.announceDNET then
+			announceDanNet(msgNoDS)
+			announceDanNet(msgDS)
+			announceDanNet(msgALL)
+		end
 		dmgTotal = 0
 		dmgCounter = 0
 		dmgTotalDS = 0
@@ -428,8 +446,12 @@ local function pDPS(dur, tType)
 		battleCounter = battleCounter + 1
 		table.insert(battlesHistory , {sequence = battleCounter, dps = dps, dur = dur, dmg = dmgTotalCombat, avg = avgDmg})
 		if settings.Options.dpsBattleReport then 
-			printf("\aw[\at%s\ax] \ayDPS \ax(\aoBATTLE\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax",
-				script, dps, (dur), dmgTotalCombat)
+			local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoBATTLE\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax",
+				script, MyName, dps, (dur), dmgTotalCombat)
+			printf(msg)
+			if settings.Options.announceDNET then
+				announceDanNet(msg)
+			end
 		end
 		dmgTotalCombat = 0
 		battlesHistory = sortTable(battlesHistory)
@@ -442,8 +464,12 @@ local function pBattleHistory()
 		return
 	end
 	for i, v in ipairs(battlesHistory) do
-		printf("\aw[\at%s\ax] \ayBattle: \ax\ao%d\ax, \ayDPS: \ax\at%.2f\ax, \ayDuration: \ax\ao%.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax",
-			script, v.sequence, v.dps, v.dur, v.dmg)
+		local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayBattle: \ax\ao%d\ax, \ayDPS: \ax\at%.2f\ax, \ayDuration: \ax\ao%.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax",
+			script, MyName, v.sequence, v.dps, v.dur, v.dmg)
+		printf(msg)
+		if settings.Options.announceDNET then
+			announceDanNet(msg)
+		end
 	end
 end
 
@@ -517,6 +543,9 @@ local function processCommand(...)
 		pDPS(os.time() - dpsStartTime)
 	elseif cmd == 'battlereport' then
 		pBattleHistory()
+	elseif cmd == 'announce' then
+		settings.Options.announceDNET = not settings.Options.announceDNET
+		printf("\aw[\at%s\ax] \ayAnnounce to DanNet Group set to %s\ax", script, settings.Options.announceDNET)
 	elseif #args == 2 and cmd == "delay" then
 		if tonumber(args[2]) then
 			settings.Options.displayTime = tonumber(args[2])
