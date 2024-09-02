@@ -6,11 +6,14 @@ local RUNNING = true
 local damTable, settings = {}, {}
 local winFlags = bit32.bor(ImGuiWindowFlags.None,
 		ImGuiWindowFlags.NoTitleBar)
-local clicked = false
+local started = false
 local fontScale = 1.5
 local clickThrough = false
-local tSize = 0
+local tableSize = 0
 local sequenceCounter = 0
+local dpsStartTime = os.time()
+local previewBG = false
+local dmgTotal, dmgCounter, dsCounter, dmgTotalDS = 0, 0, 0, 0
 
 local defaults = {
 	Options = {
@@ -24,6 +27,8 @@ local defaults = {
 		displayTime = 10,
 		fontScale = 1.5,
 		bgColor = {0, 0, 0, 0.5},
+		dpsReportTimer = 60,
+		dpsReport = true,
 	},
 	MeleeColors = {
 		["crush"] = { 1, 0, 0, 1},
@@ -99,7 +104,7 @@ end
 local function npcMeleeCallBack(line, dType, target, dmg)
 	if not tonumber(dmg) then
 		type = 'missedMe'
-		dmg = 'MISSED ME'
+		dmg = 'MISSED'
 	else
 		type = 'gothit'
 		local startType, stopType = string.find(line, "(%w+) YOU")
@@ -113,7 +118,7 @@ local function npcMeleeCallBack(line, dType, target, dmg)
 	table.insert(damTable, {type = type, target = target, damage = dmg,
 		timestamp = os.time(), sequence = sequenceCounter
 	})
-	tSize = tSize + 1
+	tableSize = tableSize + 1
 end
 
 local function nonMeleeClallBack(line, target, dmg)
@@ -122,10 +127,16 @@ local function nonMeleeClallBack(line, target, dmg)
 	if target == nil then target = 'YOU' type = "YOU-non-melee" end
 
 	if string.find(line, "was hit") then
-		-- local findStart, findStop = string.find(line, "was")
 		target = string.sub(line, 1, string.find(line, "was") - 2)
 		type = "dShield"
-		-- target = string.sub(line, 1, string.find(line, " was hit by non-melee for") - 1)
+	end
+
+	if type ~= 'dShield' then
+		dmgTotal = dmgTotal + (tonumber(dmg) or 0)
+		dmgCounter = dmgCounter + 1
+	else
+		dmgTotalDS = dmgTotalDS + (tonumber(dmg) or 0)
+		dsCounter = dsCounter + 1
 	end
 
 	if not settings.Options.showDS and type == 'dShield' then return end
@@ -135,58 +146,55 @@ local function nonMeleeClallBack(line, target, dmg)
 	table.insert(damTable, {type = type, target = target, damage = dmg,
 		timestamp = os.time(), sequence = sequenceCounter
 	})
-	tSize = tSize + 1
+	tableSize = tableSize + 1
 end
 
 local function meleeCallBack(line, dType, target, dmg)
 	if string.find(line, "have been healed") then return end
-	local type = dType or "gothit"
+	local type = dType or nil
+	if type == nil then return end
 	if dmg == nil then
 		dmg = 'MISSED'
 		type = 'miss'
 	end
 
+	dmgTotal = dmgTotal + (tonumber(dmg) or 0)
+	dmgCounter = dmgCounter + 1
+
 	if not settings.Options.showMyMisses and type == 'miss' then return end
+
 	if type == 'miss' then target = 'YOU' end
 	if damTable == nil then damTable = {} end
+	
 	sequenceCounter = sequenceCounter + 1
 	table.insert(damTable, {type = type, target = target, damage = dmg,
 		timestamp = os.time(), sequence = sequenceCounter
 	})
-	tSize = tSize + 1
+	tableSize = tableSize + 1
 end
 
 local function critalCallBack(line, dmg)
 	if not tonumber(dmg) then return end
+
+	dmgTotal = dmgTotal + (tonumber(dmg) or 0)
+	dmgCounter = dmgCounter + 1
+
 	if damTable == nil then damTable = {} end
 	sequenceCounter = sequenceCounter + 1
 	table.insert(damTable, {type = "crit", target = mq.TLO.Target.CleanName(), damage = string.format("CRIT <%d>",dmg),
 		timestamp = os.time(), sequence = sequenceCounter
 	})
-	tSize = tSize + 1
+	tableSize = tableSize + 1
 end
 
--- local function cleanTable()
--- 	if tSize > 0 then
--- 		local currentTime = os.time()
--- 		for i, v in ipairs(damTable) do
--- 			if currentTime - v.timestamp > settings.Options.displayTime then
--- 				table.remove(damTable, i)
--- 				tSize = tSize - 1
--- 				cleanTable()
--- 			end
--- 		end
--- 	end
--- end
-
 local function cleanTable()
-	if tSize > 0 then
+	if tableSize > 0 then
 		local currentTime = os.time()
 		local i = 1
-		while i <= tSize do
+		while i <= tableSize do
 			if currentTime - damTable[i].timestamp > settings.Options.displayTime then
 				table.remove(damTable, i)
-				tSize = tSize - 1
+				tableSize = tableSize - 1
 			else
 				i = i + 1
 			end
@@ -210,14 +218,18 @@ local workingTable = {}
 local function Draw_GUI()
 	ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
 	local bgColor = settings.Options.bgColor
-	if clicked then ImGui.PushStyleColor(ImGuiCol.WindowBg, ImVec4(bgColor[1], bgColor[2], bgColor[3], bgColor[4])) end
+	if previewBG or started then
+		ImGui.PushStyleColor(ImGuiCol.WindowBg, ImVec4(bgColor[1], bgColor[2], bgColor[3], bgColor[4]))
+	else
+		ImGui.PushStyleColor(ImGuiCol.WindowBg, ImVec4(0.1, 0.1, 0.1, 0.9))
+	end
 	local open, show = ImGui.Begin(script.."##"..mq.TLO.Me.Name(), true, winFlags)
 	if not open then
 		RUNNING = false
 	end
 	if show then
 		ImGui.SetWindowFontScale(fontScale)
-		if not clicked then
+		if not started then
 				ImGui.Text("This will show the last %d seconds of YOUR melee attacks.", settings.Options.displayTime)
 				ImGui.Text("The window is click through after you start.")
 				ImGui.Text("/mydps help for a list of commands.")
@@ -233,6 +245,10 @@ local function Draw_GUI()
 				end
 				ImGui.SeparatorText("Window Background Color")
 				settings.Options.bgColor = ImGui.ColorEdit4("Background Color", settings.Options.bgColor, bit32.bor(ImGuiColorEditFlags.NoInputs, ImGuiColorEditFlags.AlphaBar))
+				ImGui.SameLine()
+				if ImGui.Button("Preview") then
+					previewBG = not previewBG
+				end
 			end
 
 			if ImGui.CollapsingHeader("Options") then
@@ -243,17 +259,29 @@ local function Draw_GUI()
 				settings.Options.showMissMe = ImGui.Checkbox("Show Missed Me", settings.Options.showMissMe)
 				settings.Options.showHitMe = ImGui.Checkbox("Show Hit Me", settings.Options.showHitMe)
 				settings.Options.showDS = ImGui.Checkbox("Show Damage Shield", settings.Options.showDS)
-				settings.Options.displayTime = ImGui.SliderInt("Display Time", settings.Options.displayTime, 1, 60)
+				settings.Options.dpsReport = ImGui.Checkbox("Show DPS Report", settings.Options.dpsReport)
+				local tmpTimer = settings.Options.dpsReportTimer / 60
+
+				ImGui.SetNextItemWidth(100)
+				tmpTimer = ImGui.SliderFloat("DPS Report Timer (minutes)", tmpTimer, 0.5, 60, "%.2f")
+				if tmpTimer ~= settings.Options.dpsReportTimer then
+					settings.Options.dpsReportTimer = tmpTimer * 60
+				end
 			end
 
-			fontScale = ImGui.SliderFloat("Font Scale", fontScale, 0.5, 2)
+			ImGui.SetNextItemWidth(100)
+			settings.Options.displayTime = ImGui.SliderInt("Display Time", settings.Options.displayTime, 1, 60)
+
+			ImGui.SetNextItemWidth(100)
+			fontScale = ImGui.SliderFloat("Font Scale", fontScale, 0.5, 2, "%.2f")
 			if ImGui.Button("Start") then
+				settings.Options.fontScale = fontScale
 				mq.pickle(configFile, settings)
 				clickThrough = true
-				clicked = true
+				started = true
 			end
 		else
-			if tSize > 0 and workingTable ~= nil then
+			if tableSize > 0 and workingTable ~= nil then
 				for i, v in ipairs(workingTable) do
 					local color = checkColor(v.type)
 					local output = ""
@@ -274,8 +302,8 @@ local function Draw_GUI()
 					end
 				end
 			end
-			ImGui.PopStyleColor()
 		end
+		ImGui.PopStyleColor()
 		ImGui.SetWindowFontScale(1)
 	end
 	ImGui.End()
@@ -289,10 +317,14 @@ local function pHelp()
 	printf("\aw[\at%s\ax] \ay/mydps clear\ax - Clear the table.", script)
 	printf("\aw[\at%s\ax] \ay/mydps showtype\ax - Show the type of attack.", script)
 	printf("\aw[\at%s\ax] \ay/mydps showtarget\ax - Show the target of the attack.", script)
+	printf("\aw[\at%s\ax] \ay/mydps showds\ax - Show damage shield.", script)
 	printf("\aw[\at%s\ax] \ay/mydps mymisses\ax - Show my misses.", script)
 	printf("\aw[\at%s\ax] \ay/mydps missedme\ax - Show NPC missed me.", script)
 	printf("\aw[\at%s\ax] \ay/mydps hitme\ax - Show NPC hit me.", script)
 	printf("\aw[\at%s\ax] \ay/mydps sort\ax - Sort newest on top.", script)
+	printf("\aw[\at%s\ax] \ay/mydps settings\ax - Show current settings.", script)
+	printf("\aw[\at%s\ax] \ay/mydps dodps\ax - Toggle DPS Auto Reporting.", script)
+	printf("\aw[\at%s\ax] \ay/mydps report\ax - Report the current DPS since Last Report.", script)
 	printf("\aw[\at%s\ax] \ay/mydps move\ax - Toggle click through, allows moving of window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps delay #\ax - Set the display time in seconds.", script)
 	printf("\aw[\at%s\ax] \ay/mydps help\ax - Show this help.", script)
@@ -308,6 +340,27 @@ local function pCurrentSettings()
 	end
 end
 
+local function pDPS(dur)
+	local dps = dur > 0 and (dmgTotal / dur) or 0
+	local dpsDS = dur > 0 and (dmgTotalDS / dur) or 0
+	local avgDmg = dmgCounter > 0 and (dmgTotal / dmgCounter) or 0
+	local grandTotal = dmgTotal + dmgTotalDS
+	local grandCounter = dmgCounter + dsCounter
+	local grangAvg = grandCounter > 0 and (grandTotal / grandCounter) or 0
+	local grandDPS = dur > 0 and (grandTotal / dur) or 0
+	printf("\aw[\at%s\ax] \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
+			script, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
+	printf("\aw[\at%s\ax] \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
+		script, dpsDS, (dur/60), dmgTotalDS, dsCounter)
+	printf("\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
+		script, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
+	dmgTotal = 0
+	dmgCounter = 0
+	dmgTotalDS = 0
+	dsCounter = 0
+	dpsStartTime = os.time()
+end
+
 local function processCommand(...)
 	local args = {...}
 	if #args == 0 then
@@ -319,15 +372,15 @@ local function processCommand(...)
 	if cmd == "exit" then
 		RUNNING = false
 	elseif cmd == "ui" then
-		clicked = false
+		started = false
 		winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
-		damTable = {}
 	elseif cmd == "clear" then
 		damTable = {}
-		tSize = 0
+		tableSize = 0
+		dmgTotal, dmgCounter, dsCounter, dmgTotalDS = 0, 0, 0, 0
 		printf("\aw[\at%s\ax] \ayTable Cleared\ax", script)
 	elseif cmd == 'start' then
-		clicked = true
+		started = true
 		clickThrough = true
 		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
 		printf("\aw[\at%s\ax] \ayStarted\ax", script)
@@ -337,6 +390,9 @@ local function processCommand(...)
 	elseif cmd == 'showtarget' then
 		settings.Options.showTarget = not settings.Options.showTarget
 		printf("\aw[\at%s\ax] \ayShow Target set to %s\ax", script, settings.Options.showTarget)
+	elseif cmd == 'showds' then
+		settings.Options.showDS = not settings.Options.showDS
+		printf("\aw[\at%s\ax] \ayShow Damage Shield set to %s\ax", script, settings.Options.showDS)
 	elseif cmd == 'mymisses' then
 		settings.Options.showMyMisses = not settings.Options.showMyMisses
 		printf("\aw[\at%s\ax] \ayShow My Misses set to %s\ax", script, settings.Options.showMyMisses)
@@ -354,6 +410,11 @@ local function processCommand(...)
 		printf("\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough)
 	elseif cmd == 'settings' then
 		pCurrentSettings()
+	elseif cmd == 'dodps' then
+		settings.Options.dpsReport = not settings.Options.dpsReport
+		printf("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, settings.Options.dpsReport)
+	elseif cmd == 'report' then
+		pDPS(os.time() - dpsStartTime)
 	elseif #args == 2 and cmd == "delay" then
 		if tonumber(args[2]) then
 			settings.Options.displayTime = tonumber(args[2])
@@ -366,6 +427,7 @@ local function processCommand(...)
 	else
 		printf("\aw[\at%s\ax] \arUnknown command, \ayType /mydps help for a list of commands.", script)
 	end
+	mq.pickle(configFile, settings)
 end
 
 local function Init()
@@ -430,16 +492,21 @@ local function Loop()
 		if mq.TLO.EverQuest.GameState() ~= "INGAME" then printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script) mq.exit() end
 		mq.doevents()
 
-		if clicked then
+		if started then
 			winFlags = clickThrough and bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration) or bit32.bor(ImGuiWindowFlags.NoDecoration)
 		else
 			winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
 		end
 
+		local currentTime = os.time()
+		if currentTime - dpsStartTime >= settings.Options.dpsReportTimer then
+			if settings.Options.dpsReport then pDPS(currentTime - dpsStartTime) end
+		end
+
 		-- Clean up the table
 		cleanTable()
 		workingTable = sortTable(damTable)
-		mq.delay(33)
+		mq.delay(5)
 	end
 end
 -- Make sure we are in game before running the script
