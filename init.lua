@@ -14,10 +14,10 @@ local tableSize = 0
 local sequenceCounter, battleCounter = 0, 0
 local dpsStartTime = os.time()
 local previewBG, showBattles = false, false
-local dmgTotal, dmgCounter, dsCounter, dmgTotalDS, dmgTotalCombat = 0, 0, 0, 0, 0
+local dmgTotal, dmgCounter, dsCounter, dmgTotalDS, dmgTotalBattle, dmgBattCounter = 0, 0, 0, 0, 0, 0
 local workingTable, battlesHistory = {}, {}
 local enteredCombat = false
-local combatStartTime = 0
+local battleStartTime, leftCombatTime = 0, 0
 
 local defaults = {
 	Options = {
@@ -142,13 +142,15 @@ local function nonMeleeClallBack(line, target, dmg)
 		dmgTotal = dmgTotal + (tonumber(dmg) or 0)
 		dmgCounter = dmgCounter + 1
 		if enteredCombat then
-			dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+			dmgTotalBattle = dmgTotalBattle + (tonumber(dmg) or 0)
+			dmgBattCounter = dmgBattCounter + 1
 		end
 	else
 		dmgTotalDS = dmgTotalDS + (tonumber(dmg) or 0)
 		dsCounter = dsCounter + 1
 		if enteredCombat then
-			dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+			dmgTotalBattle = dmgTotalBattle + (tonumber(dmg) or 0)
+			dmgBattCounter = dmgBattCounter + 1
 		end
 	end
 
@@ -174,7 +176,8 @@ local function meleeCallBack(line, dType, target, dmg)
 	dmgTotal = dmgTotal + (tonumber(dmg) or 0)
 	dmgCounter = dmgCounter + 1
 	if enteredCombat then
-		dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+		dmgTotalBattle = dmgTotalBattle + (tonumber(dmg) or 0)
+		dmgBattCounter = dmgBattCounter + 1
 	end
 
 	if not settings.Options.showMyMisses and type == 'miss' then return end
@@ -195,7 +198,8 @@ local function critalCallBack(line, dmg)
 	dmgTotal = dmgTotal + (tonumber(dmg) or 0)
 	dmgCounter = dmgCounter + 1
 	if enteredCombat then
-		dmgTotalCombat = dmgTotalCombat + (tonumber(dmg) or 0)
+		dmgTotalBattle = dmgTotalBattle + (tonumber(dmg) or 0)
+		dmgBattCounter = dmgBattCounter + 1
 	end
 
 	if damTable == nil then damTable = {} end
@@ -340,10 +344,11 @@ local function Draw_GUI()
 		if showReport then
 			ImGui.SetWindowFontScale(fontScale)
 			if #battlesHistory > 0 then
-				if ImGui.BeginTable("Battles", 4, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable)) then
+				if ImGui.BeginTable("Battles", 5, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable)) then
 					ImGui.TableSetupColumn("Battle", ImGuiTableColumnFlags.None)
 					ImGui.TableSetupColumn("DPS", ImGuiTableColumnFlags.None)
 					ImGui.TableSetupColumn("Duration", ImGuiTableColumnFlags.None)
+					ImGui.TableSetupColumn("Avg. Damage", ImGuiTableColumnFlags.None)
 					ImGui.TableSetupColumn("Total Damage", ImGuiTableColumnFlags.None)
 					ImGui.TableSetupScrollFreeze(0, 1)
 					ImGui.TableHeadersRow()
@@ -355,6 +360,8 @@ local function Draw_GUI()
 						ImGui.Text("%.2f", v.dps)
 						ImGui.TableNextColumn()
 						ImGui.Text("%.0f", v.dur)
+						ImGui.TableNextColumn()
+						ImGui.Text("%d", v.avg)
 						ImGui.TableNextColumn()
 						ImGui.Text("%d", v.dmg)
 					end
@@ -408,11 +415,12 @@ local function announceDanNet(msg)
 	end
 end
 
-local function pDPS(dur, tType)
-	if tType == nil then tType = "ALL" end
-	if tType ~= 'COMBAT' and  tType ~= 'ALL' then return end
-	if tType == 'All' then
-		if dmgTotal == 0 and dmgTotalDS == 0 then return end
+---comment
+---@param dur integer @ duration in seconds
+---@param rType string @ type of report (ALL, COMBAT)
+local function pDPS(dur, rType)
+	if dur == nil then printf(printf("\aw[\at%s\ax] \ayNothing to Report! Try again later.",script)) return end
+	if rType:lower() == "all" then
 		local dps = dur > 0 and (dmgTotal / dur) or 0
 		local dpsDS = dur > 0 and (dmgTotalDS / dur) or 0
 		local avgDmg = dmgCounter > 0 and (dmgTotal / dmgCounter) or 0
@@ -420,12 +428,12 @@ local function pDPS(dur, tType)
 		local grandCounter = dmgCounter + dsCounter
 		local grangAvg = grandCounter > 0 and (grandTotal / grandCounter) or 0
 		local grandDPS = dur > 0 and (grandTotal / dur) or 0
-		local msgNoDS = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
-				script, MyName, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
-		local msgDS = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
-			script, MyName, dpsDS, (dur/60), dmgTotalDS, dsCounter)
-		local msgALL = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
-			script, MyName, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
+		local msgNoDS = string.format("\aw[\at%s\ax] \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
+				script, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
+		local msgDS = string.format("\aw[\at%s\ax] \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
+			script, dpsDS, (dur/60), dmgTotalDS, dsCounter)
+		local msgALL = string.format("\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
+			script, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
 		printf(msgNoDS)
 		printf(msgDS)
 		printf(msgALL)
@@ -439,34 +447,34 @@ local function pDPS(dur, tType)
 		dmgTotalDS = 0
 		dsCounter = 0
 		dpsStartTime = os.time()
-	elseif tType == 'COMBAT' then
-		if dmgTotalCombat == 0 then return end
-		local dps = dur > 0 and (dmgTotalCombat / dur) or 0
-		local avgDmg = dmgCounter > 0 and (dmgTotalCombat / dmgCounter) or 0
+	elseif rType:lower() == 'combat' then
+		if dmgTotalBattle == 0 then return end
+		local dps = dur > 0 and (dmgTotalBattle / dur) or 0
+		local avgDmg = dmgBattCounter > 0 and (dmgTotalBattle / dmgBattCounter) or 0
 		battleCounter = battleCounter + 1
-		table.insert(battlesHistory , {sequence = battleCounter, dps = dps, dur = dur, dmg = dmgTotalCombat, avg = avgDmg})
+		table.insert(battlesHistory , {sequence = battleCounter, dps = dps, dur = dur, dmg = dmgTotalBattle, avg = avgDmg})
 		if settings.Options.dpsBattleReport then 
-			local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoBATTLE\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax",
-				script, MyName, dps, (dur), dmgTotalCombat)
-			printf(msg)
+			local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoBATTLE\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax, \ayAvg. Damage: \ax\ao%d\ax",
+				script, MyName, dps, dur, dmgTotalBattle, avgDmg)
+			print(msg)
 			if settings.Options.announceDNET then
 				announceDanNet(msg)
 			end
 		end
-		dmgTotalCombat = 0
+		dmgTotalBattle = 0
 		battlesHistory = sortTable(battlesHistory)
 	end
 end
 
 local function pBattleHistory()
-	if battlesHistory == nil then
+	if battleCounter  == 0 then
 		printf("\aw[\at%s\ax] \ayNo Battle History\ax", script)
 		return
 	end
 	for i, v in ipairs(battlesHistory) do
-		local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayBattle: \ax\ao%d\ax, \ayDPS: \ax\at%.2f\ax, \ayDuration: \ax\ao%.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax",
-			script, MyName, v.sequence, v.dps, v.dur, v.dmg)
-		printf(msg)
+		local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayBattle: \ax\ao%d\ax, \ayDPS: \ax\at%.2f\ax, \ayDuration: \ax\ao%.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax, \ayAvg. Damage: \ax\ao%d\ax",
+			script, MyName, v.sequence, v.dps, v.dur, v.dmg, v.avg)
+		print(msg)
 		if settings.Options.announceDNET then
 			announceDanNet(msg)
 		end
@@ -540,7 +548,8 @@ local function processCommand(...)
 			printf("\aw[\at%s\ax] \arInvalid argument, \ayType \at/mydps doreporting\ax takes arguments \aw[\agall\aw|\agbattle\aw|\agtime\aw] \ayplease try again.", script)
 		end
 	elseif cmd == 'report' then
-		pDPS(os.time() - dpsStartTime)
+		local dur = os.time() - dpsStartTime
+		pDPS(dur, 'ALL')
 	elseif cmd == 'battlereport' then
 		pBattleHistory()
 	elseif cmd == 'announce' then
@@ -640,17 +649,29 @@ local function Loop()
 
 		local currentTime = os.time()
 		if currentTime - dpsStartTime >= settings.Options.dpsTimeSpanReportTimer then
-			if settings.Options.dpsTimeSpanReport then pDPS(currentTime - dpsStartTime) end
+			local dur = currentTime - dpsStartTime
+			if settings.Options.dpsTimeSpanReport then
+				pDPS(dur, 'ALL')
+			end
 		end
 
 		if mq.TLO.Me.CombatState() == 'COMBAT' and not enteredCombat then
 			enteredCombat = true
-			combatStartTime = os.time()
+			battleStartTime = os.time()
+			leftCombatTime = 0
 		elseif mq.TLO.Me.CombatState() ~= 'COMBAT' and enteredCombat then
-			enteredCombat = false
-			local combatTime = os.time() - combatStartTime
-			pDPS(combatTime, "COMBAT")
-			combatStartTime = 0
+			if leftCombatTime == 0 then
+				leftCombatTime = os.time()
+			end
+
+			local endOfCombat = os.time() - leftCombatTime
+			if endOfCombat > 5 then
+				enteredCombat = false
+				local battleDuration = os.time() - battleStartTime - endOfCombat
+				pDPS(battleDuration, "COMBAT")
+				battleStartTime = 0
+				leftCombatTime = 0
+			end
 		end
 		-- Clean up the table
 		cleanTable()

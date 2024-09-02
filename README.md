@@ -2,11 +2,15 @@
 
 by Grimmier
 
-## Scrolling Combat window for MacroQuest.
+## Scrolling Combat window and DPS reporting for MacroQuest.
 
 Creates a window to output your damage to. When first opened you are presented with the options display. While the options is displayed, you can adjust the size and position of the window. Atfer you have configured your settings and positioned the window, click the Start button.
 
 Once you Press the Start button, the Window will change backgrounds and become click-through. You will not be able to interact with it. To allow moving of the window you can use ```/mydps move``` to toggle mouse interaction (for moveing) on|off or you can use ```/mydps ui``` to re-enter the options view, where you can edit settings and resize / move the window. 
+
+The script will keep track of Damage over a Time span (customizable) and Per Battle. You can set auto reporting to console for both; Timespan reporting will happen evern x amount of time, you set this delay; Battle reporting will happen when the fights over. There are also options for reporting this over DanNet Group channel. 
+
+There is a Battle History window you can toggle to show your past battle reports. You can also report this table to console with a command line prompt as well. 
 
 ## UI Settings
 
