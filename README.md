@@ -1,6 +1,11 @@
 # MyDPS
+by Grimmier
 
 ## Scrolling Combat window for MacroQuest.
+
+Creates a window to output your damage to. When first opened you are presented with the options display. While the options is displayed, you can adjust the size and position of the window. Atfer you have configured your settings and positioned the window, click the Start button.
+
+Once you Press the Start button, the Window will change backgrounds and become click-through. You will not be able to interact with it. To allow moving of the window you can use ```/mydps move``` to toggle mouse interaction (for moveing) on|off or you can use ```/mydps ui``` to re-enter the options view, where you can edit settings and resize / move the window. 
 
 ## UI Settings
 
@@ -23,6 +28,7 @@
 
 ## Commands
 
+* /lua run mydps - Start the script.
 * /mydps start - Start the DPS window.
 * /mydps exit - Exit the script.
 * /mydps ui - Show the UI.
