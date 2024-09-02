@@ -9,6 +9,7 @@ local winFlags = bit32.bor(ImGuiWindowFlags.None,
 local update = os.time()
 local clicked = false
 local fontScale = 1.5
+local clickThrough = false
 
 local defaults = {
 	Options = {
@@ -190,8 +191,8 @@ local function Draw_GUI()
 			fontScale = ImGui.SliderFloat("Font Scale", fontScale, 0.5, 2)
 			if ImGui.Button("Start") then
 				mq.pickle(configFile, settings)
+				clickThrough = true
 				clicked = true
-				winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
 				damTable = {}
 			end
 		else
@@ -232,6 +233,7 @@ local function pHelp()
 	printf("\aw[\at%s\ax] \ay/mydps missedme\ax - Show NPC missed me.", script)
 	printf("\aw[\at%s\ax] \ay/mydps hitme\ax - Show NPC hit me.", script)
 	printf("\aw[\at%s\ax] \ay/mydps sort\ax - Sort newest on top.", script)
+	printf("\aw[\at%s\ax] \ay/mydps move\ax - Toggle click through, allows moving of window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps delay #\ax - Set the display time in seconds.", script)
 	printf("\aw[\at%s\ax] \ay/mydps help\ax - Show this help.", script)
 end
@@ -277,6 +279,9 @@ local function processCommand(...)
 	elseif cmd == 'sort' then
 		settings.Options.sortNewest = not settings.Options.sortNewest
 		printf("\aw[\at%s\ax] \aySort Newest set to %s\ax", script, settings.Options.sortNewest)
+	elseif cmd == 'move' then
+		clickThrough = not clickThrough
+		printf("\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough)
 	elseif #args == 2 and cmd == "delay" then
 		if tonumber(args[2]) then
 			settings.Options.displayTime = tonumber(args[2])
@@ -330,6 +335,11 @@ local function Loop()
 		-- Make sure we are still in game or exit the script.
 		if mq.TLO.EverQuest.GameState() ~= "INGAME" then printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script) mq.exit() end
 		mq.doevents()
+		if clicked then
+			winFlags = clickThrough and bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration) or bit32.bor(ImGuiWindowFlags.NoDecoration)
+		else
+			winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
+		end
 		-- Clean up the table
 		cleanTable()
 		mq.delay(10)
