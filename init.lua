@@ -6,10 +6,11 @@ local RUNNING = true
 local damTable, settings = {}, {}
 local winFlags = bit32.bor(ImGuiWindowFlags.None,
 		ImGuiWindowFlags.NoTitleBar)
-local update = os.time()
 local clicked = false
 local fontScale = 1.5
 local clickThrough = false
+local tSize = 0
+local sequenceCounter = 0
 
 local defaults = {
 	Options = {
@@ -19,6 +20,7 @@ local defaults = {
 		showMyMisses = true,
 		showMissMe = true,
 		showHitMe = true,
+		showDS = true,
 		displayTime = 10,
 		fontScale = 1.5,
 		bgColor = {0, 0, 0, 0.5},
@@ -36,6 +38,9 @@ local defaults = {
 		["missedMe"] = {1,0,1,1},
 		["non-melee"] = {1,1,1,1},
 		["gothit"] = {1,0,0,1},
+		["crit"] = {1,1,0,1},
+		["YOU-non-melee"] = {1,1,0,1},
+		["dShield"] = {0,1,0,1},
 	}
 }
 
@@ -79,6 +84,18 @@ local function loadSettings()
 	if newSetting then mq.pickle(configFile, settings) end
 end
 
+local function sortTable(tbl)
+	if #tbl == 0 then return end
+	table.sort(tbl, function(a, b)
+		if settings.Options.sortNewest then
+			return (a.sequence > b.sequence)
+		else
+			return (a.sequence < b.sequence)
+		end
+	end)
+	return tbl
+end
+
 local function npcMeleeCallBack(line, dType, target, dmg)
 	if not tonumber(dmg) then
 		type = 'missedMe'
@@ -87,27 +104,38 @@ local function npcMeleeCallBack(line, dType, target, dmg)
 		type = 'gothit'
 		local startType, stopType = string.find(line, "(%w+) YOU")
 		target = string.sub(line, 1, startType - 2)
-		-- local tmp = string.sub(line,"YOU" -1)
-		-- if tmp ~= nil then
-		-- 	for k, v in pairs(MeleeColors) do
-		-- 		if string.find(line, k) then
-		-- 			tmp = k
-		-- 			target = string.sub(line, 1, string.find(line, tmp) - 1)
-		-- 			break
-		-- 		end
-		-- 	end
-		-- end
 	end
 	if target == nil then return end
 	if not settings.Options.showMissMe and type == 'missedMe' then return end
 	if not settings.Options.showHitMe and type == 'gothit' then return end
-	table.insert(damTable, {type = type, target = target, damage = dmg, timestamp = os.time()})
-	update = os.time()
-	if settings.Options.sortNewest then
-		table.sort(damTable, function(a, b) return a.timestamp > b.timestamp end)
-	else
-		table.sort(damTable, function(a, b) return a.timestamp < b.timestamp end)
+	if damTable == nil then damTable = {} end
+	sequenceCounter = sequenceCounter + 1
+	table.insert(damTable, {type = type, target = target, damage = dmg,
+		timestamp = os.time(), sequence = sequenceCounter
+	})
+	tSize = tSize + 1
+end
+
+local function nonMeleeClallBack(line, target, dmg)
+	if not tonumber(dmg) then return end
+	local type = "non-melee"
+	if target == nil then target = 'YOU' type = "YOU-non-melee" end
+
+	if string.find(line, "was hit") then
+		-- local findStart, findStop = string.find(line, "was")
+		target = string.sub(line, 1, string.find(line, "was") - 2)
+		type = "dShield"
+		-- target = string.sub(line, 1, string.find(line, " was hit by non-melee for") - 1)
 	end
+
+	if not settings.Options.showDS and type == 'dShield' then return end
+
+	if damTable == nil then damTable = {} end
+	sequenceCounter = sequenceCounter + 1
+	table.insert(damTable, {type = type, target = target, damage = dmg,
+		timestamp = os.time(), sequence = sequenceCounter
+	})
+	tSize = tSize + 1
 end
 
 local function meleeCallBack(line, dType, target, dmg)
@@ -120,23 +148,50 @@ local function meleeCallBack(line, dType, target, dmg)
 
 	if not settings.Options.showMyMisses and type == 'miss' then return end
 	if type == 'miss' then target = 'YOU' end
-	table.insert(damTable, {type = type, target = target, damage = dmg, timestamp = os.time()})
-	update = os.time()
-	if settings.Options.sortNewest then
-		table.sort(damTable, function(a, b) return a.timestamp > b.timestamp end)
-	else
-		table.sort(damTable, function(a, b) return a.timestamp < b.timestamp end)
-	end
+	if damTable == nil then damTable = {} end
+	sequenceCounter = sequenceCounter + 1
+	table.insert(damTable, {type = type, target = target, damage = dmg,
+		timestamp = os.time(), sequence = sequenceCounter
+	})
+	tSize = tSize + 1
 end
 
+local function critalCallBack(line, dmg)
+	if not tonumber(dmg) then return end
+	if damTable == nil then damTable = {} end
+	sequenceCounter = sequenceCounter + 1
+	table.insert(damTable, {type = "crit", target = mq.TLO.Target.CleanName(), damage = string.format("CRIT <%d>",dmg),
+		timestamp = os.time(), sequence = sequenceCounter
+	})
+	tSize = tSize + 1
+end
+
+-- local function cleanTable()
+-- 	if tSize > 0 then
+-- 		local currentTime = os.time()
+-- 		for i, v in ipairs(damTable) do
+-- 			if currentTime - v.timestamp > settings.Options.displayTime then
+-- 				table.remove(damTable, i)
+-- 				tSize = tSize - 1
+-- 				cleanTable()
+-- 			end
+-- 		end
+-- 	end
+-- end
+
 local function cleanTable()
-	local timeCheck = os.time()
-	for i, v in ipairs(damTable) do
-		if timeCheck - v.timestamp > settings.Options.displayTime then
-			table.remove(damTable, i)
+	if tSize > 0 then
+		local currentTime = os.time()
+		local i = 1
+		while i <= tSize do
+			if currentTime - damTable[i].timestamp > settings.Options.displayTime then
+				table.remove(damTable, i)
+				tSize = tSize - 1
+			else
+				i = i + 1
+			end
 		end
 	end
-	update = os.time()
 end
 
 ---comment
@@ -149,6 +204,8 @@ local function checkColor(t)
 		return {1, 1, 1, 1}
 	end
 end
+
+local workingTable = {}
 
 local function Draw_GUI()
 	ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
@@ -185,6 +242,7 @@ local function Draw_GUI()
 				settings.Options.showMyMisses = ImGui.Checkbox("Show My Misses", settings.Options.showMyMisses)
 				settings.Options.showMissMe = ImGui.Checkbox("Show Missed Me", settings.Options.showMissMe)
 				settings.Options.showHitMe = ImGui.Checkbox("Show Hit Me", settings.Options.showHitMe)
+				settings.Options.showDS = ImGui.Checkbox("Show Damage Shield", settings.Options.showDS)
 				settings.Options.displayTime = ImGui.SliderInt("Display Time", settings.Options.displayTime, 1, 60)
 			end
 
@@ -193,25 +251,27 @@ local function Draw_GUI()
 				mq.pickle(configFile, settings)
 				clickThrough = true
 				clicked = true
-				damTable = {}
 			end
 		else
-			if #damTable > 0 then
-				for i, v in ipairs(damTable) do
+			if tSize > 0 and workingTable ~= nil then
+				for i, v in ipairs(workingTable) do
 					local color = checkColor(v.type)
 					local output = ""
 
-					if settings.Options.showType then
+					if settings.Options.showType and v.type ~= nil then
 						output = output .. " " .. v.type
 					end
 
-					if settings.Options.showTarget then
+					if settings.Options.showTarget and v.target ~= nil then
 						output = output .. " " .. v.target
 					end
 
-					output = output .. " " .. v.damage
+					if v.damage ~= nil then
+						output = output .. " " .. v.damage
 
-					ImGui.TextColored(ImVec4(color[1],color[2],color[3], color[4]), "%s",output)
+						-- Display the output text with color
+						ImGui.TextColored(ImVec4(color[1], color[2], color[3], color[4]), "%s", output)
+					end
 				end
 			end
 			ImGui.PopStyleColor()
@@ -238,6 +298,16 @@ local function pHelp()
 	printf("\aw[\at%s\ax] \ay/mydps help\ax - Show this help.", script)
 end
 
+local function pCurrentSettings()
+	for k, v in pairs(settings.Options) do
+		if k == "bgColor" then
+			printf("\aw[\at%s\ax] \ay%s\ax = {\ar%s\ax, \ag%s\ax, \at%s\ax,\ao %s\ax}", script, k, v[1], v[2], v[3], v[4])
+		else
+			printf("\aw[\at%s\ax] \ay%s\ax = \at%s", script, k, v)
+		end
+	end
+end
+
 local function processCommand(...)
 	local args = {...}
 	if #args == 0 then
@@ -254,12 +324,12 @@ local function processCommand(...)
 		damTable = {}
 	elseif cmd == "clear" then
 		damTable = {}
-		update = os.time()
+		tSize = 0
 		printf("\aw[\at%s\ax] \ayTable Cleared\ax", script)
 	elseif cmd == 'start' then
 		clicked = true
+		clickThrough = true
 		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
-		damTable = {}
 		printf("\aw[\at%s\ax] \ayStarted\ax", script)
 	elseif cmd == 'showtype' then
 		settings.Options.showType = not settings.Options.showType
@@ -282,6 +352,8 @@ local function processCommand(...)
 	elseif cmd == 'move' then
 		clickThrough = not clickThrough
 		printf("\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough)
+	elseif cmd == 'settings' then
+		pCurrentSettings()
 	elseif #args == 2 and cmd == "delay" then
 		if tonumber(args[2]) then
 			settings.Options.displayTime = tonumber(args[2])
@@ -314,13 +386,35 @@ local function Init()
 		Combat : #*#slash#*#point#*# of damage#*#
 		Combat : #*#trike through#*#
 		You try to #1# #2*, but miss!
+
+		Crits : #*#ASSASSINATE#*#
+		Crits : #*#Finishing Blow#*#
+		Crits : #*#crippling blow#*#
+		Crits : #*#xceptional#*#
+		Crits : #*#critical hit#*#
+		Crits : #*#critical blast#*#
+		You deliver a critical blast!
+		Mollypolly scores a critical hit! (312)
+		You score a critical hit! (312)
+		#1# hit #2# for #3# points of non-melee damage.
+		You were hit by non-melee for %1 damage.
+		#2# was hit by non-melee for #3# points of damage
 	]]
 	-- Register Events
 	loadSettings()
+	local MyName = mq.TLO.Me.CleanName()
+	local str = string.format("#*#%s scores a critical hit! #*#(#1#)", MyName)
+	mq.event("melee_crit", "#*#You score a critical hit! #*#(#1#)", critalCallBack )
+	mq.event("melee_crit2", "#*#You deliver a critical blast! #*#(#1#)", critalCallBack )
+	mq.event("melee_crit3", str, critalCallBack )
+	str = string.format("#*#%s hit #1# for #2# points of non-melee damage#*#", MyName)
+	mq.event("melee_non_melee", str , nonMeleeClallBack)
+	mq.event("melee_damage_shield", "#*# was hit by non-melee for #2# points of damage#*#", nonMeleeClallBack)
+	mq.event("melee_you_hit_non-melee", "#*#You were hit by non-melee for #2# damage#*#", nonMeleeClallBack)
 	mq.event("melee_do_damage", "#*#You #1# #2# for #3# points of damage#*#", meleeCallBack )
 	mq.event("melee_miss", "#*#You try to #1# #2#, but miss#*#", meleeCallBack )
-	mq.event("melee_got_hit", "#2# #1# YOU for #3# points of damage.", npcMeleeCallBack )
-	mq.event("melee_missed_me", "#2# tries to #1# YOU, but misses!", npcMeleeCallBack )
+	mq.event("melee_got_hit", "#2# #1# YOU for #3# points of damage#*#", npcMeleeCallBack )
+	mq.event("melee_missed_me", "#2# tries to #1# YOU, but misses#*#", npcMeleeCallBack )
 	mq.bind("/mydps", processCommand)
 	-- Initialize ImGui
 	mq.imgui.init(script, Draw_GUI)
@@ -335,14 +429,17 @@ local function Loop()
 		-- Make sure we are still in game or exit the script.
 		if mq.TLO.EverQuest.GameState() ~= "INGAME" then printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script) mq.exit() end
 		mq.doevents()
+
 		if clicked then
 			winFlags = clickThrough and bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration) or bit32.bor(ImGuiWindowFlags.NoDecoration)
 		else
 			winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
 		end
+
 		-- Clean up the table
 		cleanTable()
-		mq.delay(10)
+		workingTable = sortTable(damTable)
+		mq.delay(33)
 	end
 end
 -- Make sure we are in game before running the script
