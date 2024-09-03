@@ -29,6 +29,7 @@ local defaults = {
 		showMissMe = true,
 		showHitMe = true,
 		showDS = true,
+		showHistory = false,
 		displayTime = 10,
 		fontScale = 1.5,
 		bgColor = {0, 0, 0, 0.5},
@@ -95,7 +96,7 @@ local function loadSettings()
 	end
 
 	fontScale = settings.Options.fontScale or fontScale
-
+	showBattles = settings.Options.showHistory or showBattles
 	if newSetting then mq.pickle(configFile, settings) end
 end
 
@@ -381,6 +382,10 @@ local function Draw_GUI()
 					ImGui.SameLine()
 					ImGui.HelpMarker("Report DPS For last Battle.")
 					showBattles = ImGui.Checkbox("Show Battle History", showBattles)
+					if showBattles ~= settings.Options.showHistory then
+						settings.Options.showHistory = showBattles
+						mq.pickle(configFile, settings)
+					end
 					ImGui.SameLine()
 					ImGui.HelpMarker("Show the Battle History Window.")
 					settings.Options.announceDNET = ImGui.Checkbox("Announce to DanNet Group", settings.Options.announceDNET)
@@ -416,6 +421,13 @@ local function Draw_GUI()
 					clickThrough = true
 					started = true
 				end
+				ImGui.SetTooltip("Start the DPS Window.")
+				ImGui.SameLine()
+				if ImGui.Button("Hide") then
+					mq.pickle(configFile, settings)
+					showCombatWindow = false
+				end
+				ImGui.SetTooltip("Hide the DPS Window.")
 			else
 				if tableSize > 0 and workingTable ~= nil then
 					for i, v in ipairs(workingTable) do
