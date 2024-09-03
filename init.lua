@@ -421,13 +421,17 @@ local function Draw_GUI()
 					clickThrough = true
 					started = true
 				end
-				ImGui.SetTooltip("Start the DPS Window.")
+				if ImGui.IsItemHovered() then
+					ImGui.SetTooltip("Start the DPS Window.")
+				end
 				ImGui.SameLine()
 				if ImGui.Button("Hide") then
 					mq.pickle(configFile, settings)
 					showCombatWindow = false
 				end
-				ImGui.SetTooltip("Hide the DPS Window.")
+				if ImGui.IsItemHovered() then
+					ImGui.SetTooltip("Hide the DPS Window.")
+				end
 			else
 				if tableSize > 0 and workingTable ~= nil then
 					for i, v in ipairs(workingTable) do
