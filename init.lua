@@ -8,7 +8,7 @@ local MyName = mq.TLO.Me.CleanName()
 local winFlags = bit32.bor(ImGuiWindowFlags.None,
 		ImGuiWindowFlags.NoTitleBar)
 local started = false
-local fontScale = 1.5
+local fontScale = 1.0
 local clickThrough = false
 local tableSize = 0
 local sequenceCounter, battleCounter = 0, 0
@@ -31,7 +31,7 @@ local defaults = {
 		showDS = true,
 		showHistory = false,
 		displayTime = 10,
-		fontScale = 1.5,
+		fontScale = 1.0,
 		bgColor = {0, 0, 0, 0.5},
 		dpsTimeSpanReportTimer = 60,
 		dpsTimeSpanReport = true,
