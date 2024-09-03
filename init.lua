@@ -13,7 +13,7 @@ local clickThrough = false
 local tableSize = 0
 local sequenceCounter, battleCounter = 0, 0
 local dpsStartTime = os.time()
-local previewBG, showBattles = false, false
+local previewBG, showBattleHistory = false, false
 local dmgTotal, dmgCounter, dsCounter, dmgTotalDS, dmgTotalBattle, dmgBattCounter = 0, 0, 0, 0, 0, 0
 local workingTable, battlesHistory = {}, {}
 local enteredCombat = false
@@ -96,7 +96,7 @@ local function loadSettings()
 	end
 
 	fontScale = settings.Options.fontScale or fontScale
-	showBattles = settings.Options.showHistory or showBattles
+	showBattleHistory = settings.Options.showHistory or showBattleHistory
 	if newSetting then mq.pickle(configFile, settings) end
 end
 
@@ -381,9 +381,9 @@ local function Draw_GUI()
 					settings.Options.dpsBattleReport = ImGui.Checkbox("Do DPS Battle Reporting", settings.Options.dpsBattleReport)
 					ImGui.SameLine()
 					ImGui.HelpMarker("Report DPS For last Battle.")
-					showBattles = ImGui.Checkbox("Show Battle History", showBattles)
-					if showBattles ~= settings.Options.showHistory then
-						settings.Options.showHistory = showBattles
+					showBattleHistory = ImGui.Checkbox("Show Battle History", showBattleHistory)
+					if showBattleHistory ~= settings.Options.showHistory then
+						settings.Options.showHistory = showBattleHistory
 						mq.pickle(configFile, settings)
 					end
 					ImGui.SameLine()
@@ -461,14 +461,20 @@ local function Draw_GUI()
 		ImGui.End()
 	end
 
-	if showBattles then
+	if showBattleHistory then
 		ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
 		local openReport, showReport = ImGui.Begin("Battles##"..mq.TLO.Me.Name(), true, ImGuiWindowFlags.None)
 		if not openReport then
-			showBattles = false
-			printf("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, showBattles)
+			showBattleHistory = false
+			settings.Options.showHistory = false
+			mq.pickle(configFile, settings)
+			printf("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, showBattleHistory)
 		end
 		if showReport then
+			if settings.Options.showHistory ~= showBattleHistory then
+				settings.Options.showHistory = showBattleHistory
+				mq.pickle(configFile, settings)
+			end
 			ImGui.SetWindowFontScale(fontScale)
 			if #battlesHistory > 0 then
 				if ImGui.BeginTable("Battles", 5, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable)) then
@@ -502,31 +508,31 @@ end
 
 local function pHelp()
 	printf("\aw[\at%s\ax] \ayCommands\ax", script)
-	printf("\aw[\at%s\ax] \ay/lua run mydps - Run the script.", script)
+	printf("\aw[\at%s\ax] \ay/lua run mydps\ax - Run the script.", script)
 	printf("\aw[\at%s\ax] \ay/lua run mydps start\ax - Run and Start, bypassing the Options Display.", script)
 	printf("\aw[\at%s\ax] \ay/lua run mydps start hide\ax - Run and Start, bypassing the Options Display and Hides the Spam Window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps start\ax - Start the DPS window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps exit\ax - Exit the script.", script)
-	printf("\aw[\at%s\ax] \ay/mydps ui\ax - Show the UI.", script)
-	printf("\aw[\at%s\ax] \ay/mydps hide\ax - Hide the Damage Spam Window.", script)
+	printf("\aw[\at%s\ax] \ay/mydps ui\ax - Toggle the Options UI.", script)
+	printf("\aw[\at%s\ax] \ay/mydps hide\ax - Toggles show|hide of the Damage Spam Window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps clear\ax - Clear the data.", script)
-	printf("\aw[\at%s\ax] \ay/mydps showtype\ax - Show the type of attack.", script)
-	printf("\aw[\at%s\ax] \ay/mydps showtarget\ax - Show the target of the attack.", script)
-	printf("\aw[\at%s\ax] \ay/mydps showds\ax - Show damage shield.", script)
-	printf("\aw[\at%s\ax] \ay/mydps history\ax - Show the battle history window.", script)
-	printf("\aw[\at%s\ax] \ay/mydps mymisses\ax - Show my misses.", script)
-	printf("\aw[\at%s\ax] \ay/mydps missed-me\ax - Show NPC missed me.", script)
-	printf("\aw[\at%s\ax] \ay/mydps hitme\ax - Show NPC hit me.", script)
-	printf("\aw[\at%s\ax] \ay/mydps sort\ax - Sort Toggle newest on top.", script)
-	printf("\aw[\at%s\ax] \ay/mydps sorthistory\ax - Sort history Toggle newest on top.", script)
-	printf("\aw[\at%s\ax] \ay/mydps settings\ax - Show current settings.", script)
-	printf("\aw[\at%s\ax] \ay/mydps doreporting [\agall\ax|\agbattle\ax|\agtime\ax]\ax  - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.", script)
+	printf("\aw[\at%s\ax] \ay/mydps showtype\ax - Toggle Showing the type of attack.", script)
+	printf("\aw[\at%s\ax] \ay/mydps showtarget\ax - Toggle Showing the Target of the attack.", script)
+	printf("\aw[\at%s\ax] \ay/mydps showds\ax - Toggle Showing damage shield.", script)
+	printf("\aw[\at%s\ax] \ay/mydps history\ax - Toggle the battle history window.", script)
+	printf("\aw[\at%s\ax] \ay/mydps mymisses\ax - Toggle Showing my misses.", script)
+	printf("\aw[\at%s\ax] \ay/mydps missed-me\ax - Toggle Showing NPC missed me.", script)
+	printf("\aw[\at%s\ax] \ay/mydps hitme\ax - Toggle Showing NPC hit me.", script)
+	printf("\aw[\at%s\ax] \ay/mydps sort [new|old]\ax - Sort Toggle newest on top. [new|old] arguments optional so set direction", script)
+	printf("\aw[\at%s\ax] \ay/mydps sorthistory [new|old]\ax - Sort history Toggle newest on top. [new|old] arguments optional so set direction", script)
+	printf("\aw[\at%s\ax] \ay/mydps settings\ax - Print current settings to console.", script)
+	printf("\aw[\at%s\ax] \ay/mydps doreporting [all|battle|time]\ax - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.", script)
 	printf("\aw[\at%s\ax] \ay/mydps report\ax - Report the Time Based DPS since Last Report.", script)
 	printf("\aw[\at%s\ax] \ay/mydps battlereport\ax - Report the battle history to console.", script)
 	printf("\aw[\at%s\ax] \ay/mydps announce\ax - Toggle Announce to DanNet Group.", script)
 	printf("\aw[\at%s\ax] \ay/mydps move\ax - Toggle click through, allows moving of window.", script)
 	printf("\aw[\at%s\ax] \ay/mydps delay #\ax - Set the combat spam display time in seconds.", script)
-	printf("\aw[\at%s\ax] \ay/mydps battledelay #\ax - - Set the Battle ending Delay time in seconds.", script)
+	printf("\aw[\at%s\ax] \ay/mydps battledelay #\ax - Set the Battle ending Delay time in seconds.", script)
 	printf("\aw[\at%s\ax] \ay/mydps help\ax - Show this help.", script)
 end
 
@@ -626,7 +632,13 @@ local function processCommand(...)
 		showCombatWindow = true
 		winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
 	elseif cmd == "hide" then
-		showCombatWindow = not showCombatWindow
+		if #args == 2 then
+			if args[2] == 'on' then
+				showCombatWindow = false
+			elseif args[2] == 'off' then
+				showCombatWindow = true
+			end
+		end
 		printf("\aw[\at%s\ax] \ayToggle Combat Spam set to %s\ax", script, showCombatWindow)
 	elseif cmd == "clear" then
 		damTable, battlesHistory = {}, {}
@@ -639,32 +651,105 @@ local function processCommand(...)
 		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
 		printf("\aw[\at%s\ax] \ayStarted\ax", script)
 	elseif cmd == 'showtype' then
-		settings.Options.showType = not settings.Options.showType
+		if #args == 2 then
+			if args[2] == 'on' then
+				settings.Options.showType = true
+			elseif args[2] == 'off' then
+				settings.Options.showType = false
+			end
+		else
+			settings.Options.showType = not settings.Options.showType
+		end
 		printf("\aw[\at%s\ax] \ayShow Type set to %s\ax", script, settings.Options.showType)
 	elseif cmd == 'showtarget' then
-		settings.Options.showTarget = not settings.Options.showTarget
+		if #args == 2 then
+			if args[2] == 'on' then
+				settings.Options.showTarget = true
+			elseif args[2] == 'off' then
+				settings.Options.showTarget = false
+			end
+		else
+			settings.Options.showTarget = not settings.Options.showTarget
+		end
 		printf("\aw[\at%s\ax] \ayShow Target set to %s\ax", script, settings.Options.showTarget)
 	elseif cmd == 'showds' then
-		settings.Options.showDS = not settings.Options.showDS
+		if #args == 2 then
+			if args[2] == 'on' then
+				settings.Options.showDS = true
+			elseif args[2] == 'off' then
+				settings.Options.showDS = false
+			end
+		else
+			settings.Options.showDS = not settings.Options.showDS
+		end
 		printf("\aw[\at%s\ax] \ayShow Damage Shield set to %s\ax", script, settings.Options.showDS)
 	elseif cmd == 'history' then
-		showBattles = not showBattles
-		printf("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, showBattles)
+		if #args == 2 then
+			if args[2] == 'on' then
+				showBattleHistory = true
+			elseif args[2] == 'off' then
+				showBattleHistory = false
+			end
+		else
+			showBattleHistory = not showBattleHistory
+		end
+		settings.Options.showHistory = showBattleHistory
+		printf("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, showBattleHistory)
 	elseif cmd == 'mymisses' then
-		settings.Options.showMyMisses = not settings.Options.showMyMisses
+		if #args == 2 then
+			if args[2] == 'on' then
+				settings.Options.showMyMisses = true
+			elseif args[2] == 'off' then
+				settings.Options.showMyMisses = false
+			end
+		else
+			settings.Options.showMyMisses = not settings.Options.showMyMisses
+		end
 		printf("\aw[\at%s\ax] \ayShow My Misses set to %s\ax", script, settings.Options.showMyMisses)
 	elseif cmd == 'missed-me' then
-		settings.Options.showMissMe = not settings.Options.showMissMe
+		if #args == 2 then
+			if args[2] == 'on' then
+				settings.Options.showMissMe = true
+			elseif args[2] == 'off' then
+				settings.Options.showMissMe = false
+			end
+		else
+			settings.Options.showMissMe = not settings.Options.showMissMe
+		end
 		printf("\aw[\at%s\ax] \ayShow Missed Me set to %s\ax", script, settings.Options.showMissMe)
 	elseif cmd == 'hitme' then
-		settings.Options.showHitMe = not settings.Options.showHitMe
+		if #args == 2 then
+			if args[2] == 'on' then
+				settings.Options.showHitMe = true
+			elseif args[2] == 'off' then
+				settings.Options.showHitMe = false
+			end
+		else
+			settings.Options.showHitMe = not settings.Options.showHitMe
+		end
 		printf("\aw[\at%s\ax] \ayShow Hit Me set to %s\ax", script, settings.Options.showHitMe)
 	elseif cmd == 'sort' then
-		settings.Options.sortNewest = not settings.Options.sortNewest
+		if #args == 2 then
+			if args[2] == 'new' then
+				settings.Options.sortNewest = true
+			elseif args[2] == 'old' then
+				settings.Options.sortNewest = false
+			end
+		else
+			settings.Options.sortNewest = not settings.Options.sortNewest
+		end
 		local dir = settings.Options.sortNewest and "Newest" or "Oldest"
 		printf("\aw[\at%s\ax] \aySort Combat Spam\ax \at%s \axOn Top!", script, dir)
 	elseif cmd == 'sorthistory' then
-		settings.Options.sortHistory = not settings.Options.sortHistory
+		if #args == 2 then
+			if args[2] == 'new' then
+				settings.Options.sortHistory = true
+			elseif args[2] == 'old' then
+				settings.Options.sortHistory = false
+			end
+		else
+			settings.Options.sortHistory = not settings.Options.sortHistory
+		end
 		battlesHistory = sortTable(battlesHistory, 'history')
 		local dir = settings.Options.sortHistory and "Newest" or "Oldest"
 		printf("\aw[\at%s\ax] \aySorted Battle History\ax \at%s \axOn Top!", script, dir)
@@ -679,7 +764,15 @@ local function processCommand(...)
 	elseif cmd == 'battlereport' then
 		pBattleHistory()
 	elseif cmd == 'announce' then
-		settings.Options.announceDNET = not settings.Options.announceDNET
+		if #args == 2 then
+			if args[2] == 'on' then
+				settings.Options.announceDNET = true
+			elseif args[2] == 'off' then
+				settings.Options.announceDNET = false
+			end
+		else
+			settings.Options.announceDNET = not settings.Options.announceDNET
+		end
 		printf("\aw[\at%s\ax] \ayAnnounce to DanNet Group set to %s\ax", script, settings.Options.announceDNET)
 	elseif #args == 2 and cmd == 'doreporting' then
 		if args[2] == 'battle' then

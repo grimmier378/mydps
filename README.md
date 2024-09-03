@@ -38,31 +38,33 @@ by Grimmier
 
 ## Commands
 
+* Many of the Show options will accept on|off arguments at the end or act as a toggle otherwise
+
 * ```/lua run mydps``` - Run the script.
 * ```/lua run mydps start``` - Run and Start, bypassing the Options Display.
 * ```/lua run mydps start hide``` - Run and Start, bypassing the Options Display and Hides the Spam Window.
 * ```/mydps start``` - Start the DPS window.
 * ```/mydps exit``` - Exit the script.
-* ```/mydps ui``` - Show the UI.
+* ```/mydps ui``` - Toggle the Options UI.
 * ```/mydps hide``` - Toggles show|hide of the Damage Spam Window.
 * ```/mydps clear``` - Clear the data.
-* ```/mydps showtype``` - Show the type of attack.
-* ```/mydps showtarget``` - Show the target of the attack.
-* ```/mydps showds``` - Show damage shield.
-* ```/mydps history``` - Show the battle history window.
-* ```/mydps mymisses``` - Show my misses.
-* ```/mydps missed-me``` - Show NPC missed me.
-* ```/mydps hitme``` - Show NPC hit me.
-* ```/mydps sort``` - Sort Toggle newest on top.
-* ```/mydps sorthistory``` - Sort history Toggle newest on top.
-* ```/mydps settings``` - Show current settings.
-* ```/mydps doreporting [all|battle|time] ``` - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.
+* ```/mydps showtype``` - Toggle Showing the type of attack.
+* ```/mydps showtarget``` - Toggle Showing the Target of the attack.
+* ```/mydps showds``` - Toggle Showing damage shield.
+* ```/mydps history``` - Toggle the battle history window.
+* ```/mydps mymisses``` - Toggle Showing my misses.
+* ```/mydps missed-me``` - Toggle Showing NPC missed me.
+* ```/mydps hitme``` - Toggle Showing NPC hit me.
+* ```/mydps sort [new|old]``` - Sort Toggle newest on top. [new|old] arguments optional so set direction
+* ```/mydps sorthistory [new|old]``` - Sort history Toggle newest on top. [new|old] arguments optional so set direction
+* ```/mydps settings``` - Print current settings to console.
+* ```/mydps doreporting [all|battle|time]``` - Toggle DPS Auto DPS reporting on for 'Battles, Time based, or BOTH'.
 * ```/mydps report``` - Report the Time Based DPS since Last Report.
 * ```/mydps battlereport``` - Report the battle history to console.
 * ```/mydps announce``` - Toggle Announce to DanNet Group.
 * ```/mydps move``` - Toggle click through, allows moving of window.
 * ```/mydps delay #``` - Set the combat spam display time in seconds.
-* ```/mydps battledelay #``` -``` - Set the Battle ending Delay time in seconds.
+* ```/mydps battledelay #``` - Set the Battle ending Delay time in seconds.
 * ```/mydps help``` - Show this help.
 
 ## Reporting
