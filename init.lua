@@ -1,63 +1,69 @@
 local mq = require('mq')
 local ImGui = require('ImGui')
+local actors = require('actors')
+local ActorDPS
 local script = 'MyDPS'
 local configFile = string.format("%s/MyUI/%s/%s/%s.lua", mq.configDir, script, mq.TLO.EverQuest.Server(), mq.TLO.Me.Name())
 local RUNNING = true
 local damTable, settings = {}, {}
 local MyName = mq.TLO.Me.CleanName()
 local winFlags = bit32.bor(ImGuiWindowFlags.None,
-		ImGuiWindowFlags.NoTitleBar)
-local started = false
+	ImGuiWindowFlags.NoTitleBar)
+local started, doActors = false, false
 local fontScale = 1.0
 local clickThrough = false
 local tableSize = 0
 local sequenceCounter, battleCounter = 0, 0
 local dpsStartTime = os.time()
-local previewBG, showBattleHistory = false, false
+local previewBG, showBattleHistory = false, true
 local dmgTotal, dmgCounter, dsCounter, dmgTotalDS, dmgTotalBattle, dmgBattCounter = 0, 0, 0, 0, 0, 0
-local workingTable, battlesHistory = {}, {}
+local workingTable, battlesHistory, actorsTable, actorsWorking = {}, {}, {}, {}
 local enteredCombat = false
-local showCombatWindow = true
+local showCombatWindow, sortParty = false, false
 local battleStartTime, leftCombatTime = 0, 0
+local firstRun = true
 
 local defaults = {
 	Options = {
-		sortNewest = false,
-		showType = true,
-		showTarget = true,
-		showMyMisses = true,
-		showMissMe = true,
-		showHitMe = true,
-		showDS = true,
-		showHistory = false,
-		displayTime = 10,
-		fontScale = 1.0,
-		bgColor = {0, 0, 0, 0.5},
+		sortNewest             = false,
+		showType               = true,
+		showTarget             = true,
+		showMyMisses           = true,
+		showMissMe             = true,
+		showHitMe              = true,
+		showDS                 = true,
+		showHistory            = true,
+		displayTime            = 10,
+		fontScale              = 1.0,
+		bgColor                = { 0, 0, 0, 0.5, },
 		dpsTimeSpanReportTimer = 60,
-		dpsTimeSpanReport = true,
-		dpsBattleReport = true,
-		announceDNET = false,
-		battleDuration = 10,
-		sortHistory = false,
+		dpsTimeSpanReport      = true,
+		dpsBattleReport        = true,
+		announceDNET           = false,
+		battleDuration         = 10,
+		sortHistory            = false,
+		announceActors         = false,
+		sortParty              = false,
+		showCombatWindow       = true,
 	},
 	MeleeColors = {
-		["crush"] = { 1, 1, 1, 1},
-		["kick"] = { 1, 1, 1, 1},
-		["bite"] = { 1, 1, 1, 1},
-		["bash"] = { 1, 1, 1, 1},
-		["hit"] = { 1, 1, 1, 1},
-		["pierce"] = { 1, 1, 1, 1},
-		["backstab"] = {1,0,0,1},
-		["slash"] = { 1, 1, 1, 1},
-		["miss"] = { 0.5, 0.5, 0.5, 1},
-		["missed-me"] = { 0.5, 0.5, 0.5, 1},
-		["non-melee"] = {0,1,1,1},
-		["hit-by"] = {1,0,0,1},
-		["crit"] = {1,1,0,1},
-		["hit-by-non-melee"] = {1,1,0,1},
-		["gothit-non-melee"] = {1,1,0,1},
-		["dShield"] = {0,1,0,1},
-	}
+		["crush"] = { 1, 1, 1, 1, },
+		["kick"] = { 1, 1, 1, 1, },
+		["bite"] = { 1, 1, 1, 1, },
+		["bash"] = { 1, 1, 1, 1, },
+		["hit"] = { 1, 1, 1, 1, },
+		["pierce"] = { 1, 1, 1, 1, },
+		["backstab"] = { 1, 0, 0, 1, },
+		["slash"] = { 1, 1, 1, 1, },
+		["miss"] = { 0.5, 0.5, 0.5, 1, },
+		["missed-me"] = { 0.5, 0.5, 0.5, 1, },
+		["non-melee"] = { 0, 1, 1, 1, },
+		["hit-by"] = { 1, 0, 0, 1, },
+		["crit"] = { 1, 1, 0, 1, },
+		["hit-by-non-melee"] = { 1, 1, 0, 1, },
+		["gothit-non-melee"] = { 1, 1, 0, 1, },
+		["dShield"] = { 0, 1, 0, 1, },
+	},
 }
 
 local function File_Exists(name)
@@ -94,15 +100,17 @@ local function loadSettings()
 			newSetting = true
 		end
 	end
-
-	fontScale = settings.Options.fontScale or fontScale
+	doActors          = settings.Options.announceActors
+	sortParty         = settings.Options.sortParty
+	fontScale         = settings.Options.fontScale or fontScale
 	showBattleHistory = settings.Options.showHistory or showBattleHistory
+	showCombatWindow  = settings.Options.showCombatWindow or showCombatWindow
 	if newSetting then mq.pickle(configFile, settings) end
 end
 
 ---comment
 ---@param tbl table @ table to sort
----@param sortType string @ type of sort (combat, history)
+---@param sortType string @ type of sort (combat, history, dps)
 ---@return table @ sorted table
 local function sortTable(tbl, sortType)
 	if sortType == nil then return tbl end
@@ -113,6 +121,16 @@ local function sortTable(tbl, sortType)
 				return (a.sequence > b.sequence)
 			else
 				return (a.sequence < b.sequence)
+			end
+		elseif sortType == 'party' then
+			if a.sequence == b.sequence then
+				if a.dps == b.dps then
+					return a.name < b.name
+				else
+					return a.dps > b.dps
+				end
+			else
+				return a.sequence > b.sequence
 			end
 		else
 			if settings.Options.sortHistory then
@@ -131,28 +149,55 @@ local function parseCurrentBattle(dur)
 		local dps = dur > 0 and (dmgTotalBattle / dur) or 0
 		local avgDmg = dmgBattCounter > 0 and (dmgTotalBattle / dmgBattCounter) or 0
 		local exists = false
-		for k, v in pairs (battlesHistory) do
+		for k, v in pairs(battlesHistory) do
 			if v.sequence == -1 or v.sequence == 9999 then
 				v.sequence = settings.Options.sortHistory and 9999 or -1
-				v.dps = dps
-				v.dur = dur
-				v.dmg = dmgTotalBattle
-				v.avg = avgDmg
-				exists = true
+				v.dps      = dps
+				v.dur      = dur
+				v.dmg      = dmgTotalBattle
+				v.avg      = avgDmg
+				exists     = true
 				break
 			end
 		end
 		if not exists then
-			table.insert(battlesHistory , {sequence = (settings.Options.sortHistory and 9999 or -1), dps = dps, dur = dur, dmg = dmgTotalBattle, avg = avgDmg})
+			table.insert(battlesHistory, { sequence = (settings.Options.sortHistory and 9999 or -1), dps = dps, dur = dur, dmg = dmgTotalBattle, avg = avgDmg, })
 		end
 		battlesHistory = sortTable(battlesHistory, 'history')
+		if settings.Options.announceActors then
+			ActorDPS:send({ mailbox = 'my_dps', }, ({ Name = MyName, Subject = 'CURRENT', BattleNum = -2, DPS = dps,
+				TimeSpan = dur, TotalDmg = dmgTotalBattle, AvgDmg = avgDmg, Remove = false, }))
+			local found = false
+			for k, v in pairs(actorsTable) do
+				if v.name == MyName then
+					v.name     = MyName
+					v.sequence = -2
+					v.dps      = dps
+					v.dur      = dur
+					v.dmg      = dmgTotalBattle
+					v.avg      = avgDmg
+					found      = true
+					break
+				end
+			end
+			if not found then
+				table.insert(actorsTable, {
+					name     = MyName,
+					sequence = -2,
+					dps      = dps,
+					dur      = dur,
+					dmg      = dmgTotalBattle,
+					avg      = avgDmg,
+				})
+			end
+		end
 	end
 end
 
 local function npcMeleeCallBack(line, dType, target, dmg)
 	if not tonumber(dmg) then
 		type = 'missed-me'
-		dmg = 'MISSED'
+		dmg  = 'MISSED'
 	else
 		type = 'hit-by'
 		local startType, stopType = string.find(line, "(%w+) YOU")
@@ -160,19 +205,23 @@ local function npcMeleeCallBack(line, dType, target, dmg)
 	end
 	if target == nil then return end
 	if not enteredCombat then
-		enteredCombat = true
-		dmgBattCounter = 0
-		dmgTotalBattle = 0
+		enteredCombat   = true
+		dmgBattCounter  = 0
+		dmgTotalBattle  = 0
 		battleStartTime = os.time()
-		leftCombatTime = 0
+		leftCombatTime  = 0
 	end
 	parseCurrentBattle(os.time() - battleStartTime)
 	if not settings.Options.showMissMe and type == 'missed-me' then return end
 	if not settings.Options.showHitMe and type == 'hit-by' then return end
 	if damTable == nil then damTable = {} end
 	sequenceCounter = sequenceCounter + 1
-	table.insert(damTable, {type = type, target = target, damage = dmg,
-		timestamp = os.time(), sequence = sequenceCounter
+	table.insert(damTable, {
+		type      = type,
+		target    = target,
+		damage    = dmg,
+		timestamp = os.time(),
+		sequence  = sequenceCounter,
 	})
 	tableSize = tableSize + 1
 end
@@ -180,18 +229,21 @@ end
 local function nonMeleeClallBack(line, target, dmg)
 	if not tonumber(dmg) then return end
 	if not enteredCombat then
-		enteredCombat = true
-		dmgBattCounter = 0
-		dmgTotalBattle = 0
+		enteredCombat   = true
+		dmgBattCounter  = 0
+		dmgTotalBattle  = 0
 		battleStartTime = os.time()
-		leftCombatTime = 0
+		leftCombatTime  = 0
 	end
 	local type = "non-melee"
-	if target == nil then target = 'YOU' type = "hit-by-non-melee" end
+	if target == nil then
+		target = 'YOU'
+		type   = "hit-by-non-melee"
+	end
 
 	if string.find(line, "was hit") then
 		target = string.sub(line, 1, string.find(line, "was") - 2)
-		type = "dShield"
+		type   = "dShield"
 	end
 
 	if type ~= 'dShield' then
@@ -210,12 +262,19 @@ local function nonMeleeClallBack(line, target, dmg)
 		end
 	end
 
-	if not settings.Options.showDS and type == 'dShield' then parseCurrentBattle(os.time() - battleStartTime) return end
+	if not settings.Options.showDS and type == 'dShield' then
+		parseCurrentBattle(os.time() - battleStartTime)
+		return
+	end
 
 	if damTable == nil then damTable = {} end
 	sequenceCounter = sequenceCounter + 1
-	table.insert(damTable, {type = type, target = target, damage = dmg,
-		timestamp = os.time(), sequence = sequenceCounter
+	table.insert(damTable, {
+		type      = type,
+		target    = target,
+		damage    = dmg,
+		timestamp = os.time(),
+		sequence  = sequenceCounter,
 	})
 	tableSize = tableSize + 1
 	parseCurrentBattle(os.time() - battleStartTime)
@@ -226,11 +285,11 @@ local function meleeCallBack(line, dType, target, dmg)
 	local type = dType or nil
 	if type == nil then return end
 	if not enteredCombat then
-		enteredCombat = true
-		dmgBattCounter = 0
-		dmgTotalBattle = 0
+		enteredCombat   = true
+		dmgBattCounter  = 0
+		dmgTotalBattle  = 0
 		battleStartTime = os.time()
-		leftCombatTime = 0
+		leftCombatTime  = 0
 	end
 	if dmg == nil then
 		dmg = 'MISSED'
@@ -244,14 +303,21 @@ local function meleeCallBack(line, dType, target, dmg)
 		dmgBattCounter = dmgBattCounter + 1
 	end
 
-	if not settings.Options.showMyMisses and type == 'miss' then parseCurrentBattle(os.time() - battleStartTime) return end
+	if not settings.Options.showMyMisses and type == 'miss' then
+		parseCurrentBattle(os.time() - battleStartTime)
+		return
+	end
 
 	if type == 'miss' then target = 'YOU' end
 	if damTable == nil then damTable = {} end
-	
+
 	sequenceCounter = sequenceCounter + 1
-	table.insert(damTable, {type = type, target = target, damage = dmg,
-		timestamp = os.time(), sequence = sequenceCounter
+	table.insert(damTable, {
+		type      = type,
+		target    = target,
+		damage    = dmg,
+		timestamp = os.time(),
+		sequence  = sequenceCounter,
 	})
 	tableSize = tableSize + 1
 	parseCurrentBattle(os.time() - battleStartTime)
@@ -260,11 +326,11 @@ end
 local function critalCallBack(line, dmg)
 	if not tonumber(dmg) then return end
 	if not enteredCombat then
-		enteredCombat = true
+		enteredCombat   = true
 		battleStartTime = os.time()
-		leftCombatTime = 0
+		leftCombatTime  = 0
 	end
-	dmgTotal = dmgTotal + (tonumber(dmg) or 0)
+	dmgTotal   = dmgTotal + (tonumber(dmg) or 0)
 	dmgCounter = dmgCounter + 1
 	if enteredCombat then
 		dmgTotalBattle = dmgTotalBattle + (tonumber(dmg) or 0)
@@ -273,8 +339,12 @@ local function critalCallBack(line, dmg)
 
 	if damTable == nil then damTable = {} end
 	sequenceCounter = sequenceCounter + 1
-	table.insert(damTable, {type = "crit", target = mq.TLO.Target.CleanName(), damage = string.format("CRIT <%d>",dmg),
-		timestamp = os.time(), sequence = sequenceCounter
+	table.insert(damTable, {
+		type      = "crit",
+		target    = mq.TLO.Target.CleanName(),
+		damage    = string.format("CRIT <%d>", dmg),
+		timestamp = os.time(),
+		sequence  = sequenceCounter,
 	})
 	tableSize = tableSize + 1
 	parseCurrentBattle(os.time() - battleStartTime)
@@ -302,8 +372,227 @@ local function checkColor(t)
 	if settings.MeleeColors[t] then
 		return settings.MeleeColors[t]
 	else
-		return {1, 1, 1, 1}
+		return { 1, 1, 1, 1, }
 	end
+end
+local color = {
+	red    = ImVec4(1, 0, 0, 1),
+	green  = ImVec4(0, 1, 0, 1),
+	blue   = ImVec4(0, 0, 1, 1),
+	yellow = ImVec4(1, 1, 0, 1),
+	orange = ImVec4(1.0, 0.5, 0, 1),
+	teal   = ImVec4(0, 1, 1, 1),
+	white  = ImVec4(1, 1, 1, 1),
+}
+local function DrawHistory(tbl)
+	if settings.Options.showHistory ~= showBattleHistory then
+		settings.Options.showHistory = showBattleHistory
+		mq.pickle(configFile, settings)
+	end
+	ImGui.SetWindowFontScale(fontScale)
+	if #tbl > 0 then
+		if ImGui.BeginTable("Battles", 6, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable)) then
+			ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.None)
+			ImGui.TableSetupColumn("Battle", ImGuiTableColumnFlags.None)
+			ImGui.TableSetupColumn("DPS", ImGuiTableColumnFlags.None)
+			ImGui.TableSetupColumn("Dur", ImGuiTableColumnFlags.None)
+			ImGui.TableSetupColumn("Avg.", ImGuiTableColumnFlags.None)
+			ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.None)
+			ImGui.TableSetupScrollFreeze(0, 1)
+			ImGui.TableHeadersRow()
+
+			for i, v in ipairs(tbl) do
+				local seq = ((v.sequence == -1 or v.sequence == 9999 or v.sequence == -2) and
+					"Current" or (v.sequence == -3 and "Last") or v.sequence)
+				local damVal = ""
+
+				if v.dmg >= 1000000 then
+					local floatNum = v.dmg / 1000000
+					damVal = string.format("%.2f m", floatNum)
+				elseif v.dmg >= 1000 then
+					local floatNum = v.dmg / 1000
+					damVal = string.format("%.2f k", floatNum)
+				else
+					damVal = v.dmg
+				end
+				local textColor = color.white
+				ImGui.TableNextRow()
+				ImGui.TableNextColumn()
+				textColor = v.name == MyName and color.teal or color.white
+				ImGui.TextColored(textColor, "%s", v.name ~= nil and v.name or MyName)
+				ImGui.TableNextColumn()
+				textColor = seq == "Current" and color.yellow or color.orange
+				ImGui.TextColored(textColor, "%s", seq)
+				ImGui.TableNextColumn()
+				ImGui.Text("%.2f", v.dps)
+				ImGui.TableNextColumn()
+				ImGui.Text("%.0f", v.dur)
+				ImGui.TableNextColumn()
+				ImGui.Text("%d", v.avg)
+				ImGui.TableNextColumn()
+				ImGui.Text("%s", damVal)
+			end
+			ImGui.EndTable()
+		end
+	end
+end
+
+local function DrawButtons()
+	local btnLabel = started and "Stop" or "Start"
+	if ImGui.Button(btnLabel) then
+		if started then
+			started = false
+			clickThrough = false
+		else
+			clickThrough = true
+			started = true
+		end
+		settings.Options.fontScale = fontScale
+		mq.pickle(configFile, settings)
+	end
+	if ImGui.IsItemHovered() then
+		ImGui.SetTooltip("%s the DPS Window.", btnLabel)
+	end
+	ImGui.SameLine()
+	local btnLabel2 = showCombatWindow and "Hide" or "Show"
+	if ImGui.Button(btnLabel2) then
+		mq.pickle(configFile, settings)
+		showCombatWindow = not showCombatWindow
+	end
+	if ImGui.IsItemHovered() then
+		ImGui.SetTooltip("%s the DPS Window.", btnLabel2)
+	end
+end
+
+local function DrawColorOptions()
+	if ImGui.CollapsingHeader("Color Key") then
+		if ImGui.BeginTable("Color Key", 2, ImGuiTableFlags.Borders) then
+			for type, color in pairs(settings.MeleeColors) do
+				ImGui.TableNextColumn()
+				settings.MeleeColors[type] = ImGui.ColorEdit4(type, color, bit32.bor(ImGuiColorEditFlags.NoInputs, ImGuiColorEditFlags.AlphaBar))
+				ImGui.SameLine()
+				ImGui.HelpMarker(string.format("Set the color for %s messages.", type))
+			end
+			ImGui.EndTable()
+		end
+		ImGui.SeparatorText("Window Background Color")
+		settings.Options.bgColor = ImGui.ColorEdit4("Background Color", settings.Options.bgColor, bit32.bor(ImGuiColorEditFlags.NoInputs, ImGuiColorEditFlags.AlphaBar))
+		ImGui.SameLine()
+		ImGui.HelpMarker("Set the background color of the window.")
+		ImGui.SameLine()
+		if ImGui.Button("BG Preview") then
+			previewBG = not previewBG
+		end
+	end
+end
+
+local function DrawOptions()
+	DrawColorOptions()
+
+	if ImGui.CollapsingHeader("Options") then
+		local col = ((ImGui.GetWindowContentRegionWidth() - 20) / 300) > 1 and ((ImGui.GetWindowContentRegionWidth() - 20) / 300) or 1
+		if ImGui.BeginTable("Options", col, ImGuiTableFlags.Borders) then
+			ImGui.TableNextColumn()
+
+			showBattleHistory = ImGui.Checkbox("Show Battle History", showBattleHistory)
+			if showBattleHistory ~= settings.Options.showHistory then
+				settings.Options.showHistory = showBattleHistory
+				mq.pickle(configFile, settings)
+			end
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show the Battle History Window.")
+			ImGui.TableNextColumn()
+			showCombatWindow = ImGui.Checkbox("Show Combat Spam History", showCombatWindow)
+			if showCombatWindow ~= settings.Options.showCombatWindow then
+				settings.Options.showCombatWindow = showCombatWindow
+				mq.pickle(configFile, settings)
+			end
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show the Combat Spam Window.")
+			ImGui.TableNextColumn()
+			settings.Options.showType = ImGui.Checkbox("Show Type", settings.Options.showType)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show the type of attack.")
+			ImGui.TableNextColumn()
+			settings.Options.showTarget = ImGui.Checkbox("Show Target", settings.Options.showTarget)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show the target of the attack. or YOU MISS")
+			ImGui.TableNextColumn()
+			settings.Options.sortNewest = ImGui.Checkbox("Sort Newest Combat Spam on top", settings.Options.sortNewest)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Sort Combat Spam the newest on top.")
+			ImGui.TableNextColumn()
+			settings.Options.sortHistory = ImGui.Checkbox("Sort Newest History on top", settings.Options.sortHistory)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Sort Battle History Table the newest on top.")
+			ImGui.TableNextColumn()
+			sortParty = ImGui.Checkbox("Sort Party DPS on top", sortParty)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Sort Party DPS the highest on top. Refrehses at about 30fps so you can read it otherwise its jumps around to fast")
+			ImGui.TableNextColumn()
+			if sortParty ~= settings.Options.sortParty then
+				settings.Options.sortParty = sortParty
+				mq.pickle(configFile, settings)
+			end
+			settings.Options.showMyMisses = ImGui.Checkbox("Show My Misses", settings.Options.showMyMisses)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show your misses.")
+			ImGui.TableNextColumn()
+			settings.Options.showMissMe = ImGui.Checkbox("Show Missed Me", settings.Options.showMissMe)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show NPC missed you.")
+			ImGui.TableNextColumn()
+			settings.Options.showHitMe = ImGui.Checkbox("Show Hit Me", settings.Options.showHitMe)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show NPC hit you.")
+			ImGui.TableNextColumn()
+			settings.Options.showDS = ImGui.Checkbox("Show Damage Shield", settings.Options.showDS)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Show Damage Shield Spam Damage.")
+			ImGui.TableNextColumn()
+			settings.Options.dpsTimeSpanReport = ImGui.Checkbox("Do DPS over Time Reporting", settings.Options.dpsTimeSpanReport)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Report DPS over a set time span.")
+			ImGui.TableNextColumn()
+			settings.Options.dpsBattleReport = ImGui.Checkbox("Do DPS Battle Reporting", settings.Options.dpsBattleReport)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Report DPS For last Battle.")
+			ImGui.TableNextColumn()
+			settings.Options.announceDNET = ImGui.Checkbox("Announce to DanNet Group", settings.Options.announceDNET)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Announce DPS Reports to DanNet Group.")
+			ImGui.TableNextColumn()
+			settings.Options.announceActors = ImGui.Checkbox("Announce to Actors", settings.Options.announceActors)
+			ImGui.SameLine()
+			ImGui.HelpMarker("Announce DPS Battle Reports to Actors.")
+			ImGui.EndTable()
+		end
+		local tmpTimer = settings.Options.dpsTimeSpanReportTimer / 60
+		ImGui.SetNextItemWidth(120)
+		tmpTimer = ImGui.SliderFloat("DPS Report Timer (minutes)", tmpTimer, 0.5, 60, "%.2f")
+		ImGui.SameLine()
+		ImGui.HelpMarker("Set the time span for DPS Over Time Span Reporting.")
+		if tmpTimer ~= settings.Options.dpsTimeSpanReportTimer then
+			settings.Options.dpsTimeSpanReportTimer = tmpTimer * 60
+		end
+		ImGui.SetNextItemWidth(120)
+		settings.Options.battleDuration = ImGui.InputInt("Battle Duration End Delay", settings.Options.battleDuration)
+		ImGui.SameLine()
+		ImGui.HelpMarker(
+			"Set the time in seconds to make sure we dont enter combat again.\n This will allow Battle Reports to handle toons that have long delay's between engaging the next mob.")
+	end
+
+	ImGui.SetNextItemWidth(120)
+	settings.Options.displayTime = ImGui.SliderInt("Display Time", settings.Options.displayTime, 1, 60)
+	ImGui.SameLine()
+	ImGui.HelpMarker("Set the time in seconds to display the damage.")
+
+	ImGui.SetNextItemWidth(120)
+	fontScale = ImGui.SliderFloat("Font Scale", fontScale, 0.5, 2, "%.2f")
+	ImGui.SameLine()
+	ImGui.HelpMarker("Set the font scale for the window.")
+
+	DrawButtons()
 end
 
 local function Draw_GUI()
@@ -316,122 +605,24 @@ local function Draw_GUI()
 		else
 			ImGui.PushStyleColor(ImGuiCol.WindowBg, ImVec4(0.1, 0.1, 0.1, 0.9))
 		end
-		local open, show = ImGui.Begin(script.."##"..mq.TLO.Me.Name(), true, winFlags)
-		if not open then
+		local isWindowOpen, showWin = ImGui.Begin(script .. "##" .. mq.TLO.Me.Name(), true, winFlags)
+		if not isWindowOpen then
 			RUNNING = false
 		end
-		if show then
+		if showWin then
 			ImGui.SetWindowFontScale(fontScale)
 			if not started then
-					ImGui.PushTextWrapPos((ImGui.GetWindowContentRegionWidth() - 20) or 20)
-					ImGui.Text("This will show the last %d seconds of YOUR melee attacks. \nThe window is click through after you start.\n run /mydps help for a list of commands. \nClick button to enable. /lua stop %s to close.", settings.Options.displayTime, script)
-					ImGui.PopTextWrapPos()
-					-- ImGui.Text("The window is click through after you start.")
-					-- ImGui.Text("/mydps help for a list of commands.")
-					-- ImGui.Text("Click button to enable. /lua stop %s to close.", script)
-
-				if ImGui.CollapsingHeader("Color Key") then
-					if ImGui.BeginTable("Color Key", 2, ImGuiTableFlags.Borders) then
-						for type, color in pairs(settings.MeleeColors) do
-							ImGui.TableNextColumn()
-							settings.MeleeColors[type] = ImGui.ColorEdit4(type, color, bit32.bor(ImGuiColorEditFlags.NoInputs, ImGuiColorEditFlags.AlphaBar))
-							ImGui.SameLine()
-							ImGui.HelpMarker(string.format("Set the color for %s messages.", type))
-						end
-						ImGui.EndTable()
-					end
-					ImGui.SeparatorText("Window Background Color")
-					settings.Options.bgColor = ImGui.ColorEdit4("Background Color", settings.Options.bgColor, bit32.bor(ImGuiColorEditFlags.NoInputs, ImGuiColorEditFlags.AlphaBar))
-					ImGui.SameLine()
-					ImGui.HelpMarker("Set the background color of the window.")
-					ImGui.SameLine()
-					if ImGui.Button("BG Preview") then
-						previewBG = not previewBG
-					end
-				end
-
-				if ImGui.CollapsingHeader("Options") then
-					settings.Options.showType = ImGui.Checkbox("Show Type", settings.Options.showType)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Show the type of attack.")
-					settings.Options.showTarget = ImGui.Checkbox("Show Target", settings.Options.showTarget)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Show the target of the attack. or YOU MISS")
-					settings.Options.sortNewest = ImGui.Checkbox("Sort Newest Combat Spam on top", settings.Options.sortNewest)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Sort Combat Spam the newest on top.")
-					settings.Options.sortHistory = ImGui.Checkbox("Sort Newest History on top", settings.Options.sortHistory)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Sort Battle History Table the newest on top.")
-					settings.Options.showMyMisses = ImGui.Checkbox("Show My Misses", settings.Options.showMyMisses)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Show your misses.")
-					settings.Options.showMissMe = ImGui.Checkbox("Show Missed Me", settings.Options.showMissMe)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Show NPC missed you.")
-					settings.Options.showHitMe = ImGui.Checkbox("Show Hit Me", settings.Options.showHitMe)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Show NPC hit you.")
-					settings.Options.showDS = ImGui.Checkbox("Show Damage Shield", settings.Options.showDS)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Show Damage Shield Spam Damage.")
-					settings.Options.dpsTimeSpanReport = ImGui.Checkbox("Do DPS over Time Reporting", settings.Options.dpsTimeSpanReport)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Report DPS over a set time span.")
-					settings.Options.dpsBattleReport = ImGui.Checkbox("Do DPS Battle Reporting", settings.Options.dpsBattleReport)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Report DPS For last Battle.")
-					showBattleHistory = ImGui.Checkbox("Show Battle History", showBattleHistory)
-					if showBattleHistory ~= settings.Options.showHistory then
-						settings.Options.showHistory = showBattleHistory
-						mq.pickle(configFile, settings)
-					end
-					ImGui.SameLine()
-					ImGui.HelpMarker("Show the Battle History Window.")
-					settings.Options.announceDNET = ImGui.Checkbox("Announce to DanNet Group", settings.Options.announceDNET)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Announce DPS Reports to DanNet Group.")
-					local tmpTimer = settings.Options.dpsTimeSpanReportTimer / 60
-					ImGui.SetNextItemWidth(120)
-					tmpTimer = ImGui.SliderFloat("DPS Report Timer (minutes)", tmpTimer, 0.5, 60, "%.2f")
-					ImGui.SameLine()
-					ImGui.HelpMarker("Set the time span for DPS Over Time Span Reporting.")
-					if tmpTimer ~= settings.Options.dpsTimeSpanReportTimer then
-						settings.Options.dpsTimeSpanReportTimer = tmpTimer * 60
-					end
-					ImGui.SetNextItemWidth(120)
-					settings.Options.battleDuration = ImGui.InputInt("Battle Duration End Delay", settings.Options.battleDuration)
-					ImGui.SameLine()
-					ImGui.HelpMarker("Set the time in seconds to make sure we dont enter combat again.\n This will allow Battle Reports to handle toons that have long delay's between engaging the next mob.")
-				end
-
-				ImGui.SetNextItemWidth(120)
-				settings.Options.displayTime = ImGui.SliderInt("Display Time", settings.Options.displayTime, 1, 60)
-				ImGui.SameLine()
-				ImGui.HelpMarker("Set the time in seconds to display the damage.")
-
-				ImGui.SetNextItemWidth(120)
-				fontScale = ImGui.SliderFloat("Font Scale", fontScale, 0.5, 2, "%.2f")
-				ImGui.SameLine()
-				ImGui.HelpMarker("Set the font scale for the window.")
-
-				if ImGui.Button("Start") then
-					settings.Options.fontScale = fontScale
-					mq.pickle(configFile, settings)
-					clickThrough = true
-					started = true
-				end
-				if ImGui.IsItemHovered() then
-					ImGui.SetTooltip("Start the DPS Window.")
-				end
-				ImGui.SameLine()
-				if ImGui.Button("Hide") then
-					mq.pickle(configFile, settings)
-					showCombatWindow = false
-				end
-				if ImGui.IsItemHovered() then
-					ImGui.SetTooltip("Hide the DPS Window.")
-				end
+				ImGui.PushTextWrapPos((ImGui.GetWindowContentRegionWidth() - 20) or 20)
+				ImGui.Text("This will show the last %d seconds of YOUR melee attacks.", settings.Options.displayTime)
+				ImGui.TextColored(color.orange, "WARNING The window is click through after you start.")
+				ImGui.Text("You can Toggle Moving the window with /mydps move.")
+				ImGui.Text("You can Toggle the This Screen with /mydps ui. Which will allow you to resize the window again")
+				ImGui.Text("run /mydps help for a list of commands.")
+				ImGui.Text("Click Start to enable.")
+				ImGui.PopTextWrapPos()
+				ImGui.Separator()
+				DrawColorOptions()
+				DrawButtons()
 			else
 				if tableSize > 0 and workingTable ~= nil then
 					for i, v in ipairs(workingTable) do
@@ -448,8 +639,6 @@ local function Draw_GUI()
 
 						if v.damage ~= nil then
 							output = output .. " " .. v.damage
-
-							-- Display the output text with color
 							ImGui.TextColored(ImVec4(color[1], color[2], color[3], color[4]), "%s", output)
 						end
 					end
@@ -463,7 +652,7 @@ local function Draw_GUI()
 
 	if showBattleHistory then
 		ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
-		local openReport, showReport = ImGui.Begin("Battles##"..mq.TLO.Me.Name(), true, ImGuiWindowFlags.None)
+		local openReport, showReport = ImGui.Begin("DPS Report##" .. mq.TLO.Me.Name(), true, ImGuiWindowFlags.None)
 		if not openReport then
 			showBattleHistory = false
 			settings.Options.showHistory = false
@@ -471,35 +660,19 @@ local function Draw_GUI()
 			printf("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, showBattleHistory)
 		end
 		if showReport then
-			if settings.Options.showHistory ~= showBattleHistory then
-				settings.Options.showHistory = showBattleHistory
-				mq.pickle(configFile, settings)
-			end
-			ImGui.SetWindowFontScale(fontScale)
-			if #battlesHistory > 0 then
-				if ImGui.BeginTable("Battles", 5, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Resizable, ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable)) then
-					ImGui.TableSetupColumn("Battle", ImGuiTableColumnFlags.None)
-					ImGui.TableSetupColumn("DPS", ImGuiTableColumnFlags.None)
-					ImGui.TableSetupColumn("Duration", ImGuiTableColumnFlags.None)
-					ImGui.TableSetupColumn("Avg. Damage", ImGuiTableColumnFlags.None)
-					ImGui.TableSetupColumn("Total Damage", ImGuiTableColumnFlags.None)
-					ImGui.TableSetupScrollFreeze(0, 1)
-					ImGui.TableHeadersRow()
-					for i, v in ipairs(battlesHistory) do
-						ImGui.TableNextRow()
-						ImGui.TableNextColumn()
-						ImGui.Text("%s", ((v.sequence == -1 or v.sequence == 9999) and "Current" or v.sequence))
-						ImGui.TableNextColumn()
-						ImGui.Text("%.2f", v.dps)
-						ImGui.TableNextColumn()
-						ImGui.Text("%.0f", v.dur)
-						ImGui.TableNextColumn()
-						ImGui.Text("%d", v.avg)
-						ImGui.TableNextColumn()
-						ImGui.Text("%d", v.dmg)
-					end
-					ImGui.EndTable()
+			if ImGui.BeginTabBar("MyDPS##") then
+				if ImGui.BeginTabItem("My History") then
+					DrawHistory(battlesHistory)
+					ImGui.EndTabItem()
 				end
+				if settings.Options.announceActors and ImGui.BeginTabItem("Party") then
+					DrawHistory(actorsWorking)
+					ImGui.EndTabItem()
+				end
+				if ImGui.BeginTabItem("Config") then
+					DrawOptions()
+				end
+				ImGui.EndTabBar()
 			end
 		end
 		ImGui.End()
@@ -556,21 +729,27 @@ end
 ---@param dur integer @ duration in seconds
 ---@param rType string @ type of report (ALL, COMBAT)
 local function pDPS(dur, rType)
-	if dur == nil then printf(printf("\aw[\at%s\ax] \ayNothing to Report! Try again later.",script)) return end
+	if dur == nil then
+		printf(printf("\aw[\at%s\ax] \ayNothing to Report! Try again later.", script))
+		return
+	end
 	if rType:lower() == "all" then
-		local dps = dur > 0 and (dmgTotal / dur) or 0
-		local dpsDS = dur > 0 and (dmgTotalDS / dur) or 0
-		local avgDmg = dmgCounter > 0 and (dmgTotal / dmgCounter) or 0
-		local grandTotal = dmgTotal + dmgTotalDS
+		local dps          = dur > 0 and (dmgTotal / dur) or 0
+		local dpsDS        = dur > 0 and (dmgTotalDS / dur) or 0
+		local avgDmg       = dmgCounter > 0 and (dmgTotal / dmgCounter) or 0
+		local grandTotal   = dmgTotal + dmgTotalDS
 		local grandCounter = dmgCounter + dsCounter
-		local grangAvg = grandCounter > 0 and (grandTotal / grandCounter) or 0
-		local grandDPS = dur > 0 and (grandTotal / dur) or 0
-		local msgNoDS = string.format("\aw[\at%s\ax] \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
-				script, dps, (dur/60), dmgTotal, dmgCounter,avgDmg )
-		local msgDS = string.format("\aw[\at%s\ax] \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
-			script, dpsDS, (dur/60), dmgTotalDS, dsCounter)
-		local msgALL = string.format("\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
-			script, grandDPS, (dur/60), grandTotal, grandCounter, grangAvg)
+		local grangAvg     = grandCounter > 0 and (grandTotal / grandCounter) or 0
+		local grandDPS     = dur > 0 and (grandTotal / dur) or 0
+		local msgNoDS      = string.format(
+			"\aw[\at%s\ax] \ayDPS \ax(\aoNO DS\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage: \ax\ao%d\ax",
+			script, dps, (dur / 60), dmgTotal, dmgCounter, avgDmg)
+		local msgDS        = string.format(
+			"\aw[\at%s\ax] \ayDPS \ax(\atDS Dmg\ax): \at%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Hits: \ax\ao%d\ax",
+			script, dpsDS, (dur / 60), dmgTotalDS, dsCounter)
+		local msgALL       = string.format(
+			"\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
+			script, grandDPS, (dur / 60), grandTotal, grandCounter, grangAvg)
 		printf(msgNoDS)
 		printf(msgDS)
 		printf(msgALL)
@@ -579,22 +758,38 @@ local function pDPS(dur, rType)
 			announceDanNet(msgDS)
 			announceDanNet(msgALL)
 		end
-		dmgTotal = 0
-		dmgCounter = 0
-		dmgTotalDS = 0
-		dsCounter = 0
+		dmgTotal     = 0
+		dmgCounter   = 0
+		dmgTotalDS   = 0
+		dsCounter    = 0
 		dpsStartTime = os.time()
 	elseif rType:lower() == 'combat' then
-		local dps = dur > 0 and (dmgTotalBattle / dur) or 0
-		local avgDmg = dmgBattCounter > 0 and (dmgTotalBattle / dmgBattCounter) or 0
+		local dps     = dur > 0 and (dmgTotalBattle / dur) or 0
+		local avgDmg  = dmgBattCounter > 0 and (dmgTotalBattle / dmgBattCounter) or 0
 		battleCounter = battleCounter + 1
-		table.insert(battlesHistory , {sequence = battleCounter, dps = dps, dur = dur, dmg = dmgTotalBattle, avg = avgDmg})
-		if settings.Options.dpsBattleReport then 
-			local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoBATTLE\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax, \ayAvg. Damage: \ax\ao%d\ax",
+		table.insert(battlesHistory, { sequence = battleCounter, dps = dps, dur = dur, dmg = dmgTotalBattle, avg = avgDmg, })
+		if settings.Options.dpsBattleReport then
+			local msg = string.format(
+				"\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoBATTLE\ax): \at%.2f\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax, \ayAvg. Damage: \ax\ao%d\ax",
 				script, MyName, dps, dur, dmgTotalBattle, avgDmg)
 			print(msg)
 			if settings.Options.announceDNET then
 				announceDanNet(msg)
+			end
+			if settings.Options.announceActors then
+				ActorDPS:send({ mailbox = 'my_dps', }, ({ Name = MyName, Subject = 'Update', BattleNum = -3,
+					DPS = dps, TimeSpan = dur, TotalDmg = dmgTotalBattle, AvgDmg = avgDmg, Remove = false, }))
+				for k, v in ipairs(actorsTable) do
+					if v.name == MyName then
+						v.name     = MyName
+						v.sequence = -3
+						v.dps      = dps
+						v.dur      = dur
+						v.dmg      = dmgTotalBattle
+						v.avg      = avgDmg
+						break
+					end
+				end
 			end
 		end
 		dmgTotalBattle = 0
@@ -603,13 +798,25 @@ local function pDPS(dur, rType)
 end
 
 local function pBattleHistory()
-	if battleCounter  == 0 then
+	if battleCounter == 0 then
 		printf("\aw[\at%s\ax] \ayNo Battle History\ax", script)
 		return
 	end
 	for i, v in ipairs(battlesHistory) do
-		local msg = string.format("\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayBattle: \ax\ao%d\ax, \ayDPS: \ax\at%.2f\ax, \ayDuration: \ax\ao%.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax, \ayAvg. Damage: \ax\ao%d\ax",
-			script, MyName, v.sequence, v.dps, v.dur, v.dmg, v.avg)
+		local damVal = ""
+
+		if v.dmg >= 1000000 then
+			local floatNum = v.dmg / 1000000
+			damVal         = string.format("%.2f m", floatNum)
+		elseif v.dmg >= 1000 then
+			local floatNum = v.dmg / 1000
+			damVal         = string.format("%.2f k", floatNum)
+		else
+			damVal = v.dmg
+		end
+		local msg = string.format(
+			"\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayBattle: \ax\ao%d\ax, \ayDPS: \ax\at%.2f\ax, \ayDuration: \ax\ao%.0f sec\ax, \ayTotal Damage: \ax\ao%d\ax, \ayAvg. Damage: \ax\ao%d\ax",
+			script, MyName, v.sequence, v.dps, v.dur, damVal, v.avg)
 		print(msg)
 		if settings.Options.announceDNET then
 			announceDanNet(msg)
@@ -618,7 +825,7 @@ local function pBattleHistory()
 end
 
 local function processCommand(...)
-	local args = {...}
+	local args = { ..., }
 	if #args == 0 then
 		printf("\aw[\at%s\ax] \arInvalid command, \ayType /mydps help for a list of commands.", script)
 		return
@@ -641,9 +848,10 @@ local function processCommand(...)
 		end
 		printf("\aw[\at%s\ax] \ayToggle Combat Spam set to %s\ax", script, showCombatWindow)
 	elseif cmd == "clear" then
-		damTable, battlesHistory = {}, {}
-		battleStartTime, dpsStartTime = 0, 0
-		dmgTotal, dmgCounter, dsCounter, dmgTotalDS, battleCounter, tableSize = 0, 0, 0, 0, 0, 0
+		damTable, battlesHistory             = {}, {}
+		battleStartTime, dpsStartTime        = 0, 0
+		dmgTotal, dmgCounter, dsCounter      = 0, 0, 0
+		dmgTotalDS, battleCounter, tableSize = 0, 0, 0
 		printf("\aw[\at%s\ax] \ayTable Cleared\ax", script)
 	elseif cmd == 'start' then
 		started = true
@@ -787,7 +995,7 @@ local function processCommand(...)
 			printf("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, settings.Options.dpsTimeSpanReport)
 		else
 			printf("\aw[\at%s\ax] \arInvalid argument, \ayType \at/mydps doreporting\ax takes arguments \aw[\agall\aw|\agbattle\aw|\agtime\aw] \ayplease try again.", script)
-		end	
+		end
 	elseif #args == 2 and cmd == "delay" then
 		if tonumber(args[2]) then
 			settings.Options.displayTime = tonumber(args[2])
@@ -810,63 +1018,80 @@ local function processCommand(...)
 	mq.pickle(configFile, settings)
 end
 
-local args = {...}
+--create mailbox for actors to send messages to
+local function RegisterActor()
+	ActorDPS = actors.register('my_dps', function(message)
+		local MemberEntry = message()
+		local who         = MemberEntry.Name
+		local timeSpan    = MemberEntry.TimeSpan or 0
+		local avgDmg      = MemberEntry.AvgDmg or 0
+		local dps         = MemberEntry.DPS or 0
+		local totalDmg    = MemberEntry.TotalDmg or 0
+		local battleNum   = MemberEntry.BattleNum or 0
+		if who == MyName then return end
+		if #actorsTable == 0 then
+			table.insert(actorsTable, { name = who, dps = dps, avg = avgDmg, dmg = totalDmg, dur = timeSpan, sequence = battleNum, })
+		else
+			local found = false
+			for i = 1, #actorsTable do
+				if actorsTable[i].name == who then
+					if MemberEntry.Remove then
+						table.remove(actorsTable, i)
+					else
+						actorsTable[i].name     = who
+						actorsTable[i].dps      = dps
+						actorsTable[i].avg      = avgDmg
+						actorsTable[i].dmg      = totalDmg
+						actorsTable[i].dur      = timeSpan
+						actorsTable[i].sequence = battleNum
+					end
+					found = true
+					break
+				end
+			end
+			if not found then
+				table.insert(actorsTable, { name = who, dps = dps, avg = avgDmg, dmg = totalDmg, dur = timeSpan, sequence = battleNum, })
+			end
+		end
+	end)
+end
+
+local args = { ..., }
 local function Init()
-
-	--[[
-		Combat : #*# Heals #*# for #*#
-		Combat : #*#crush#*#point#*# of damage#*#
-		Combat : #*# healed #*# for #*#
-		Combat : #*# kick#*#point#*# of damage#*#
-		Combat : #*# bite#*#point#*# of damage#*#
-		Combat : #*#non-melee#*#
-		Combat : #*# bash#*#point#*# of damage#*#
-		Combat : #*# hits#*#point#*# of damage#*#
-		Combat : #*#You hit #*# for #*#
-		Combat : #*#pierce#*#point#*# of damage#*#
-		Combat : #*#backstabs #*#
-		Combat : #*# but miss#*#
-		Combat : #*#slash#*#point#*# of damage#*#
-		Combat : #*#trike through#*#
-		You try to #1# #2*, but miss!
-
-		Crits : #*#ASSASSINATE#*#
-		Crits : #*#Finishing Blow#*#
-		Crits : #*#crippling blow#*#
-		Crits : #*#xceptional#*#
-		Crits : #*#critical hit#*#
-		Crits : #*#critical blast#*#
-		You deliver a critical blast!
-		Mollypolly scores a critical hit! (312)
-		You score a critical hit! (312)
-		#1# hit #2# for #3# points of non-melee damage.
-		You were hit by non-melee for %1 damage.
-		#2# was hit by non-melee for #3# points of damage
-		#1# scores a Deadly Strike!(#2#)
-	]]
-	-- Register Events
 	loadSettings()
-	local MyName = mq.TLO.Me.CleanName()
+
+	MyName = mq.TLO.Me.CleanName()
+
+	-- Register Events
 	local str = string.format("#*#%s scores a critical hit! #*#(#1#)", MyName)
-	mq.event("melee_crit", "#*#You score a critical hit! #*#(#1#)", critalCallBack )
-	mq.event("melee_crit2", "#*#You deliver a critical blast! #*#(#1#)", critalCallBack )
-	mq.event("melee_crit3", str, critalCallBack )
+
+	mq.event("melee_crit", "#*#You score a critical hit! #*#(#1#)", critalCallBack)
+	mq.event("melee_crit2", "#*#You deliver a critical blast! #*#(#1#)", critalCallBack)
+	mq.event("melee_crit3", str, critalCallBack)
 	str = string.format("#*#%s scores a Deadly Strike! #*#(#1#)", MyName)
-	mq.event("melee_deadly_strike", str, critalCallBack )
+	mq.event("melee_deadly_strike", str, critalCallBack)
 	str = string.format("#*#%s hit #1# for #2# points of non-melee damage#*#", MyName)
-	mq.event("melee_non_melee", str , nonMeleeClallBack)
+	mq.event("melee_non_melee", str, nonMeleeClallBack)
 	mq.event("melee_damage_shield", "#*# was hit by non-melee for #2# points of damage#*#", nonMeleeClallBack)
 	mq.event("melee_you_hit_non-melee", "#*#You were hit by non-melee for #2# damage#*#", nonMeleeClallBack)
-	mq.event("melee_do_damage", "#*#You #1# #2# for #3# points of damage#*#", meleeCallBack )
-	mq.event("melee_miss", "#*#You try to #1# #2#, but miss#*#", meleeCallBack )
-	mq.event("melee_got_hit", "#2# #1# YOU for #3# points of damage#*#", npcMeleeCallBack )
-	mq.event("melee_missed_me", "#2# tries to #1# YOU, but misses#*#", npcMeleeCallBack )
+	mq.event("melee_do_damage", "#*#You #1# #2# for #3# points of damage#*#", meleeCallBack)
+	mq.event("melee_miss", "#*#You try to #1# #2#, but miss#*#", meleeCallBack)
+	mq.event("melee_got_hit", "#2# #1# YOU for #3# points of damage#*#", npcMeleeCallBack)
+	mq.event("melee_missed_me", "#2# tries to #1# YOU, but misses#*#", npcMeleeCallBack)
 	mq.bind("/mydps", processCommand)
+
 	-- Initialize ImGui
 	mq.imgui.init(script, Draw_GUI)
+
+	-- Register Actor Mailbox
+	if settings.Options.announceActors then RegisterActor() end
+
+	-- Print Help
 	pHelp()
+
+	-- Check for arguments
 	if args[1] ~= nil and args[1] == "start" then
-		if #args == 2 and args [2] == 'hide' then
+		if #args == 2 and args[2] == 'hide' then
 			showCombatWindow = false
 		end
 		started = true
@@ -877,11 +1102,21 @@ local function Init()
 end
 
 local function Loop()
+	local uiTime = 1
 	-- Main Loop
 	while RUNNING do
-
 		-- Make sure we are still in game or exit the script.
-		if mq.TLO.EverQuest.GameState() ~= "INGAME" then printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script) mq.exit() end
+		if mq.TLO.EverQuest.GameState() ~= "INGAME" then
+			printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script)
+			mq.exit()
+		end
+
+		if doActors ~= settings.Options.announceActors then
+			if settings.Options.announceActors then
+				RegisterActor()
+			end
+			doActors = settings.Options.announceActors
+		end
 
 		if started then
 			winFlags = clickThrough and bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration) or bit32.bor(ImGuiWindowFlags.NoDecoration)
@@ -898,7 +1133,6 @@ local function Loop()
 		end
 
 		if mq.TLO.Me.CombatState() ~= 'COMBAT' and enteredCombat then
-
 			if leftCombatTime == 0 then
 				leftCombatTime = os.time()
 			end
@@ -907,7 +1141,7 @@ local function Loop()
 			if endOfCombat > settings.Options.battleDuration then
 				enteredCombat = false
 				local battleDuration = os.time() - battleStartTime - endOfCombat
-				for k, v in pairs (battlesHistory) do
+				for k, v in pairs(battlesHistory) do
 					if v.sequence == -1 or v.sequence == 9999 then
 						table.remove(battlesHistory, k)
 					end
@@ -921,11 +1155,25 @@ local function Loop()
 		parseCurrentBattle(currentTime - battleStartTime)
 		cleanTable()
 		workingTable = sortTable(damTable, 'combat')
+		if doActors and uiTime == 1 then actorsWorking = sortTable(actorsTable, 'party') end
+		if sortParty then
+			actorsWorking = actorsTable
+		end
 		mq.doevents()
 		mq.delay(5)
+		if sortParty then
+			uiTime = uiTime + 5
+			if uiTime >= 34 then
+				if doActors then actorsWorking = sortTable(actorsTable, 'party') end
+				uiTime = 0
+			end
+		end
 	end
 end
 -- Make sure we are in game before running the script
-if mq.TLO.EverQuest.GameState() ~= "INGAME" then printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script) mq.exit() end
+if mq.TLO.EverQuest.GameState() ~= "INGAME" then
+	printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script)
+	mq.exit()
+end
 Init()
 Loop()
