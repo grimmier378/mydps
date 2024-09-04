@@ -624,6 +624,7 @@ local function Draw_GUI()
 				DrawColorOptions()
 				DrawButtons()
 			else
+				ImGui.PushTextWrapPos((ImGui.GetWindowContentRegionWidth() - 20) or 20)
 				if tableSize > 0 and workingTable ~= nil then
 					for i, v in ipairs(workingTable) do
 						local color = checkColor(v.type)
@@ -643,6 +644,7 @@ local function Draw_GUI()
 						end
 					end
 				end
+				ImGui.PopTextWrapPos()
 			end
 			ImGui.PopStyleColor()
 			ImGui.SetWindowFontScale(1)
