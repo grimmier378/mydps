@@ -9,19 +9,18 @@ local damTable, settings = {}, {}
 local MyName = mq.TLO.Me.CleanName()
 local winFlags = bit32.bor(ImGuiWindowFlags.None,
 	ImGuiWindowFlags.NoTitleBar)
-local started, doActors = false, false
-local fontScale = 1.0
+local started = false
 local clickThrough = false
 local tableSize = 0
 local sequenceCounter, battleCounter = 0, 0
 local dpsStartTime = os.time()
-local previewBG, showBattleHistory = false, true
+local previewBG = false
 local dmgTotal, dmgCounter, dsCounter, dmgTotalDS, dmgTotalBattle, dmgBattCounter, critHealsTotal, critTotalBattle = 0, 0, 0, 0, 0, 0, 0, 0
 local workingTable, battlesHistory, actorsTable, actorsWorking = {}, {}, {}, {}
 local enteredCombat = false
-local showCombatWindow, sortParty = false, false
 local battleStartTime, leftCombatTime = 0, 0
 local firstRun = true
+local tempSettings = {}
 local defaults = {
 	Options = {
 		sortNewest             = false,
@@ -35,6 +34,7 @@ local defaults = {
 		showHistory            = true,
 		displayTime            = 10,
 		fontScale              = 1.0,
+		spamFontScale          = 1.0,
 		bgColor                = { 0, 0, 0, 0.5, },
 		dpsTimeSpanReportTimer = 60,
 		dpsTimeSpanReport      = true,
@@ -61,18 +61,20 @@ local defaults = {
 		["hit-by"] = { 1, 0, 0, 1, },
 		["crit"] = { 1, 1, 0, 1, },
 		["hit-by-non-melee"] = { 1, 1, 0, 1, },
-		["gothit-non-melee"] = { 1, 1, 0, 1, },
 		["dShield"] = { 0, 1, 0, 1, },
 		['critHeals'] = { 0, 1, 1, 1, },
 	},
 }
 
 
-local function printOutput(msg)
+local function printOutput(msg, ...)
+	msg = string.format(msg, ...)
+	---@diagnostic disable-next-line: undefined-field
 	local useMyChat = mq.TLO.MyChatTlo ~= nil and true or false
 	if not useMyChat then
 		printf(msg)
 	else
+		---@diagnostic disable-next-line: undefined-field
 		mq.TLO.MyChatTlo(script, msg)
 	end
 end
@@ -87,6 +89,18 @@ local function File_Exists(name)
 	end
 end
 
+local function CheckRemovedSettings(def, settings)
+	local newSetting = false
+	for setting, value in pairs(settings or {}) do
+		if def[setting] == nil then
+			printOutput("\ayFound Depreciated Setting: \ao%s \ayRemoving it from the Settings File.", setting)
+			settings[setting] = nil
+			newSetting = true
+		end
+	end
+	return newSetting
+end
+
 local function loadSettings()
 	if not File_Exists(configFile) then
 		settings = defaults
@@ -98,24 +112,32 @@ local function loadSettings()
 			settings = defaults
 		end
 	end
+
 	local newSetting = false
+
+	-- check for new settings
 	for k, v in pairs(defaults.MeleeColors) do
 		if settings.MeleeColors[k] == nil then
 			settings.MeleeColors[k] = v
 			newSetting = true
 		end
 	end
+
 	for k, v in pairs(defaults.Options) do
 		if settings.Options[k] == nil then
 			settings.Options[k] = v
 			newSetting = true
 		end
 	end
-	doActors          = settings.Options.announceActors ~= nil and settings.Options.announceActors or false
-	sortParty         = settings.Options.sortParty ~= nil and settings.Options.sortParty or false
-	fontScale         = settings.Options.fontScale ~= nil and settings.Options.fontScale or 1.0
-	showBattleHistory = settings.Options.showHistory ~= nil and settings.Options.showHistory or false
-	showCombatWindow  = settings.Options.showCombatWindow ~= nil and settings.Options.showCombatWindow or false
+	-- check for removed settings
+	newSetting = CheckRemovedSettings(defaults.Options, settings.Options) and true or newSetting
+	newSetting = CheckRemovedSettings(defaults.MeleeColors, settings.MeleeColors) and true or newSetting
+
+	-- set local settings
+	for k, v in pairs(settings.Options or {}) do
+		tempSettings[k] = v
+	end
+	tempSettings.doActors = settings.Options.announceActors
 	if newSetting then mq.pickle(configFile, settings) end
 end
 
@@ -500,11 +522,11 @@ local color = {
 }
 
 local function DrawHistory(tbl)
-	if settings.Options.showHistory ~= showBattleHistory then
-		settings.Options.showHistory = showBattleHistory
+	if settings.Options.showHistory ~= tempSettings.showHistory then
+		settings.Options.showHistory = tempSettings.showHistory
 		mq.pickle(configFile, settings)
 	end
-	ImGui.SetWindowFontScale(fontScale)
+	ImGui.SetWindowFontScale(tempSettings.fontScale)
 	if #tbl > 0 then
 		if ImGui.BeginTable("Battles", 8, bit32.bor(ImGuiTableFlags.Borders, ImGuiTableFlags.Resizable,
 				ImGuiTableFlags.Reorderable, ImGuiTableFlags.Hideable, ImGuiTableFlags.ScrollY)) then
@@ -560,20 +582,31 @@ local function DrawButtons()
 			clickThrough = true
 			started = true
 		end
-		settings.Options.fontScale = fontScale
+		settings.Options.fontScale = tempSettings.fontScale
 		mq.pickle(configFile, settings)
 	end
 	if ImGui.IsItemHovered() then
 		ImGui.SetTooltip("%s the DPS Window.", btnLabel)
 	end
 	ImGui.SameLine()
-	local btnLabel2 = showCombatWindow and "Hide" or "Show"
+	local btnLabel2 = tempSettings.showCombatWindow and "Hide" or "Show"
 	if ImGui.Button(btnLabel2) then
 		mq.pickle(configFile, settings)
-		showCombatWindow = not showCombatWindow
+		tempSettings.showCombatWindow = not tempSettings.showCombatWindow
 	end
 	if ImGui.IsItemHovered() then
 		ImGui.SetTooltip("%s the DPS Window.", btnLabel2)
+	end
+	local changedSettings = false
+	for k, v in pairs(tempSettings or {}) do
+		if settings.Options[k] ~= nil then
+			settings.Options[k] = v
+			changedSettings = true
+		end
+	end
+	if changedSettings then
+		mq.pickle(configFile, settings)
+		changedSettings = false
 	end
 end
 
@@ -604,119 +637,110 @@ local function DrawOptions()
 
 	if ImGui.CollapsingHeader("Options") then
 		local col = ((ImGui.GetWindowContentRegionWidth() - 20) / 300) > 1 and ((ImGui.GetWindowContentRegionWidth() - 20) / 300) or 1
-		if ImGui.BeginTable("Options", col, ImGuiTableFlags.Borders) then
-			ImGui.TableNextColumn()
+		if ImGui.CollapsingHeader("Toggles") then
+			if ImGui.BeginTable("Options", col, ImGuiTableFlags.Borders) then
+				ImGui.TableNextColumn()
 
-			showBattleHistory = ImGui.Checkbox("Show Battle History", showBattleHistory)
-			if showBattleHistory ~= settings.Options.showHistory then
-				settings.Options.showHistory = showBattleHistory
-				mq.pickle(configFile, settings)
+				tempSettings.showHistory = ImGui.Checkbox("Show Battle History", tempSettings.showHistory)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show the Battle History Window.")
+				ImGui.TableNextColumn()
+				tempSettings.showCombatWindow = ImGui.Checkbox("Show Combat Spam History", tempSettings.showCombatWindow)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show the Combat Spam Window.")
+				ImGui.TableNextColumn()
+				tempSettings.showType = ImGui.Checkbox("Show Type", tempSettings.showType)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show the type of attack.")
+				ImGui.TableNextColumn()
+				tempSettings.showTarget = ImGui.Checkbox("Show Target", tempSettings.showTarget)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show the target of the attack. or YOU MISS")
+				ImGui.TableNextColumn()
+				tempSettings.sortNewest = ImGui.Checkbox("Sort Newest Combat Spam on top", tempSettings.sortNewest)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Sort Combat Spam the newest on top.")
+				ImGui.TableNextColumn()
+				tempSettings.sortHistory = ImGui.Checkbox("Sort Newest History on top", tempSettings.sortHistory)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Sort Battle History Table the newest on top.")
+				ImGui.TableNextColumn()
+				tempSettings.sortParty = ImGui.Checkbox("Sort Party DPS on top", tempSettings.sortParty)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Sort Party DPS the highest on top. Refrehses at about 30fps so you can read it otherwise its jumps around to fast")
+				ImGui.TableNextColumn()
+				tempSettings.showMyMisses = ImGui.Checkbox("Show My Misses", tempSettings.showMyMisses)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show your misses.")
+				ImGui.TableNextColumn()
+				tempSettings.showMissMe = ImGui.Checkbox("Show Missed Me", tempSettings.showMissMe)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show NPC missed you.")
+				ImGui.TableNextColumn()
+				tempSettings.showHitMe = ImGui.Checkbox("Show Hit Me", tempSettings.showHitMe)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show NPC hit you.")
+				ImGui.TableNextColumn()
+				tempSettings.showCritHeals = ImGui.Checkbox("Show Crit Heals", tempSettings.showCritHeals)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show Critical Heals.")
+				ImGui.TableNextColumn()
+				tempSettings.showDS = ImGui.Checkbox("Show Damage Shield", tempSettings.showDS)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Show Damage Shield Spam Damage.")
+				ImGui.TableNextColumn()
+				tempSettings.dpsTimeSpanReport = ImGui.Checkbox("Do DPS over Time Reporting", tempSettings.dpsTimeSpanReport)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Report DPS over a set time span.")
+				ImGui.TableNextColumn()
+				tempSettings.dpsBattleReport = ImGui.Checkbox("Do DPS Battle Reporting", tempSettings.dpsBattleReport)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Report DPS For last Battle.")
+				ImGui.TableNextColumn()
+				tempSettings.announceDNET = ImGui.Checkbox("Announce to DanNet Group", tempSettings.announceDNET)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Announce DPS Reports to DanNet Group.")
+				ImGui.TableNextColumn()
+				tempSettings.announceActors = ImGui.Checkbox("Announce to Actors", tempSettings.announceActors)
+				ImGui.SameLine()
+				ImGui.HelpMarker("Announce DPS Battle Reports to Actors.")
+				ImGui.EndTable()
 			end
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show the Battle History Window.")
-			ImGui.TableNextColumn()
-			showCombatWindow = ImGui.Checkbox("Show Combat Spam History", showCombatWindow)
-			if showCombatWindow ~= settings.Options.showCombatWindow then
-				settings.Options.showCombatWindow = showCombatWindow
-				mq.pickle(configFile, settings)
-			end
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show the Combat Spam Window.")
-			ImGui.TableNextColumn()
-			settings.Options.showType = ImGui.Checkbox("Show Type", settings.Options.showType)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show the type of attack.")
-			ImGui.TableNextColumn()
-			settings.Options.showTarget = ImGui.Checkbox("Show Target", settings.Options.showTarget)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show the target of the attack. or YOU MISS")
-			ImGui.TableNextColumn()
-			settings.Options.sortNewest = ImGui.Checkbox("Sort Newest Combat Spam on top", settings.Options.sortNewest)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Sort Combat Spam the newest on top.")
-			ImGui.TableNextColumn()
-			settings.Options.sortHistory = ImGui.Checkbox("Sort Newest History on top", settings.Options.sortHistory)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Sort Battle History Table the newest on top.")
-			ImGui.TableNextColumn()
-			sortParty = ImGui.Checkbox("Sort Party DPS on top", sortParty)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Sort Party DPS the highest on top. Refrehses at about 30fps so you can read it otherwise its jumps around to fast")
-			ImGui.TableNextColumn()
-			if sortParty ~= settings.Options.sortParty then
-				settings.Options.sortParty = sortParty
-				mq.pickle(configFile, settings)
-			end
-			settings.Options.showMyMisses = ImGui.Checkbox("Show My Misses", settings.Options.showMyMisses)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show your misses.")
-			ImGui.TableNextColumn()
-			settings.Options.showMissMe = ImGui.Checkbox("Show Missed Me", settings.Options.showMissMe)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show NPC missed you.")
-			ImGui.TableNextColumn()
-			settings.Options.showHitMe = ImGui.Checkbox("Show Hit Me", settings.Options.showHitMe)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show NPC hit you.")
-			ImGui.TableNextColumn()
-			settings.Options.showCritHeals = ImGui.Checkbox("Show Crit Heals", settings.Options.showCritHeals)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show Critical Heals.")
-			ImGui.TableNextColumn()
-			settings.Options.showDS = ImGui.Checkbox("Show Damage Shield", settings.Options.showDS)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Show Damage Shield Spam Damage.")
-			ImGui.TableNextColumn()
-			settings.Options.dpsTimeSpanReport = ImGui.Checkbox("Do DPS over Time Reporting", settings.Options.dpsTimeSpanReport)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Report DPS over a set time span.")
-			ImGui.TableNextColumn()
-			settings.Options.dpsBattleReport = ImGui.Checkbox("Do DPS Battle Reporting", settings.Options.dpsBattleReport)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Report DPS For last Battle.")
-			ImGui.TableNextColumn()
-			settings.Options.announceDNET = ImGui.Checkbox("Announce to DanNet Group", settings.Options.announceDNET)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Announce DPS Reports to DanNet Group.")
-			ImGui.TableNextColumn()
-			settings.Options.announceActors = ImGui.Checkbox("Announce to Actors", settings.Options.announceActors)
-			ImGui.SameLine()
-			ImGui.HelpMarker("Announce DPS Battle Reports to Actors.")
-			ImGui.EndTable()
 		end
-		local tmpTimer = settings.Options.dpsTimeSpanReportTimer / 60
+		local tmpTimer = tempSettings.dpsTimeSpanReportTimer / 60
 		ImGui.SetNextItemWidth(120)
 		tmpTimer = ImGui.SliderFloat("DPS Report Timer (minutes)", tmpTimer, 0.5, 60, "%.2f")
 		ImGui.SameLine()
 		ImGui.HelpMarker("Set the time span for DPS Over Time Span Reporting.")
-		if tmpTimer ~= settings.Options.dpsTimeSpanReportTimer then
-			settings.Options.dpsTimeSpanReportTimer = tmpTimer * 60
-		end
 		ImGui.SetNextItemWidth(120)
-		settings.Options.battleDuration = ImGui.InputInt("Battle Duration End Delay", settings.Options.battleDuration)
+		tempSettings.battleDuration = ImGui.InputInt("Battle Duration End Delay", tempSettings.battleDuration)
 		ImGui.SameLine()
 		ImGui.HelpMarker(
 			"Set the time in seconds to make sure we dont enter combat again.\n This will allow Battle Reports to handle toons that have long delay's between engaging the next mob.")
+
+		ImGui.SetNextItemWidth(120)
+		tempSettings.displayTime = ImGui.SliderInt("Display Time", tempSettings.displayTime, 1, 60)
+		ImGui.SameLine()
+		ImGui.HelpMarker("Set the time in seconds to display the damage.")
+
+		ImGui.SetNextItemWidth(120)
+		tempSettings.fontScale = ImGui.SliderFloat("Font Scale", tempSettings.fontScale, 0.5, 2, "%.2f")
+		ImGui.SameLine()
+		ImGui.HelpMarker("Set the font scale for the Report window.")
+
+		ImGui.SetNextItemWidth(120)
+		tempSettings.spamFontScale = ImGui.SliderFloat("Spam Font Scale", tempSettings.spamFontScale, 0.5, 2, "%.2f")
+		ImGui.SameLine()
+		ImGui.HelpMarker("Set the font scale for the CombatSpam window.")
 	end
-
-	ImGui.SetNextItemWidth(120)
-	settings.Options.displayTime = ImGui.SliderInt("Display Time", settings.Options.displayTime, 1, 60)
-	ImGui.SameLine()
-	ImGui.HelpMarker("Set the time in seconds to display the damage.")
-
-	ImGui.SetNextItemWidth(120)
-	fontScale = ImGui.SliderFloat("Font Scale", fontScale, 0.5, 2, "%.2f")
-	ImGui.SameLine()
-	ImGui.HelpMarker("Set the font scale for the window.")
-
 	DrawButtons()
 end
 
 local function Draw_GUI()
 	if not RUNNING then return end
-	if showCombatWindow then
+	if tempSettings.showCombatWindow then
 		ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
-		local bgColor = settings.Options.bgColor
+		local bgColor = tempSettings.bgColor
 		if previewBG or started then
 			ImGui.PushStyleColor(ImGuiCol.WindowBg, ImVec4(bgColor[1], bgColor[2], bgColor[3], bgColor[4]))
 		else
@@ -727,10 +751,10 @@ local function Draw_GUI()
 			RUNNING = false
 		end
 		if showWin then
-			ImGui.SetWindowFontScale(fontScale)
+			ImGui.SetWindowFontScale(tempSettings.spamFontScale)
 			if not started then
 				ImGui.PushTextWrapPos((ImGui.GetWindowContentRegionWidth() - 20) or 20)
-				ImGui.Text("This will show the last %d seconds of YOUR melee attacks.", settings.Options.displayTime)
+				ImGui.Text("This will show the last %d seconds of YOUR melee attacks.", tempSettings.displayTime)
 				ImGui.TextColored(color.orange, "WARNING The window is click through after you start.")
 				ImGui.Text("You can Toggle Moving the window with /mydps move.")
 				ImGui.Text("You can Toggle the This Screen with /mydps ui. Which will allow you to resize the window again")
@@ -769,14 +793,14 @@ local function Draw_GUI()
 		ImGui.End()
 	end
 
-	if showBattleHistory then
+	if tempSettings.showHistory then
 		ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
 		local openReport, showReport = ImGui.Begin("DPS Report##" .. mq.TLO.Me.Name(), true, ImGuiWindowFlags.None)
 		if not openReport then
-			showBattleHistory = false
+			tempSettings.showHistory = false
 			settings.Options.showHistory = false
 			mq.pickle(configFile, settings)
-			printOutput(string.format("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, showBattleHistory))
+			printOutput("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, tempSettings.showHistory)
 		end
 		if showReport then
 			if ImGui.BeginTabBar("MyDPS##") then
@@ -884,7 +908,7 @@ end
 ---@param rType string @ type of report (ALL, COMBAT)
 local function pDPS(dur, rType)
 	if dur == nil then
-		printOutput(string.format("\aw[\at%s\ax] \ayNothing to Report! Try again later.", script))
+		printOutput("\aw[\at%s\ax] \ayNothing to Report! Try again later.", script)
 		return
 	end
 	if rType:lower() == "all" then
@@ -957,7 +981,7 @@ end
 
 local function pBattleHistory()
 	if battleCounter == 0 then
-		printOutput(string.format("\aw[\at%s\ax] \ayNo Battle History\ax", script))
+		printOutput("\aw[\at%s\ax] \ayNo Battle History\ax", script)
 		return
 	end
 	for i, v in ipairs(battlesHistory) do
@@ -974,7 +998,7 @@ end
 local function processCommand(...)
 	local args = { ..., }
 	if #args == 0 then
-		printOutput(string.format("\aw[\at%s\ax] \arInvalid command, \ayType /mydps help for a list of commands.", script))
+		printOutput("\aw[\at%s\ax] \arInvalid command, \ayType /mydps help for a list of commands.", script)
 		return
 	end
 	local cmd = args[1]
@@ -983,134 +1007,134 @@ local function processCommand(...)
 		RUNNING = false
 	elseif cmd == "ui" then
 		started = false
-		showCombatWindow = true
+		tempSettings.showCombatWindow = true
 		winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
 	elseif cmd == "hide" then
 		if #args == 2 then
 			if args[2] == 'on' then
-				showCombatWindow = false
+				tempSettings.showCombatWindow = false
 			elseif args[2] == 'off' then
-				showCombatWindow = true
+				tempSettings.showCombatWindow = true
 			end
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayToggle Combat Spam set to %s\ax", script, showCombatWindow))
+		printOutput("\aw[\at%s\ax] \ayToggle Combat Spam set to %s\ax", script, tempSettings.showCombatWindow)
 	elseif cmd == "clear" then
 		damTable, battlesHistory             = {}, {}
 		battleStartTime, dpsStartTime        = 0, 0
 		dmgTotal, dmgCounter, dsCounter      = 0, 0, 0
 		dmgTotalDS, battleCounter, tableSize = 0, 0, 0
-		printOutput(string.format("\aw[\at%s\ax] \ayTable Cleared\ax", script))
+		printOutput("\aw[\at%s\ax] \ayTable Cleared\ax", script)
 	elseif cmd == 'start' then
 		started = true
 		clickThrough = true
 		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
-		printOutput(string.format("\aw[\at%s\ax] \ayStarted\ax", script))
+		printOutput("\aw[\at%s\ax] \ayStarted\ax", script)
 	elseif cmd == 'showtype' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				settings.Options.showType = true
+				tempSettings.showType = true
 			elseif args[2] == 'off' then
-				settings.Options.showType = false
+				tempSettings.showType = false
 			end
 		else
-			settings.Options.showType = not settings.Options.showType
+			tempSettings.showType = not tempSettings.showType
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayShow Type set to %s\ax", script, settings.Options.showType))
+		printOutput("\aw[\at%s\ax] \ayShow Type set to %s\ax", script, tempSettings.showType)
 	elseif cmd == 'showtarget' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				settings.Options.showTarget = true
+				tempSettings.showTarget = true
 			elseif args[2] == 'off' then
-				settings.Options.showTarget = false
+				tempSettings.showTarget = false
 			end
 		else
-			settings.Options.showTarget = not settings.Options.showTarget
+			tempSettings.showTarget = not tempSettings.showTarget
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayShow Target set to %s\ax", script, settings.Options.showTarget))
+		printOutput("\aw[\at%s\ax] \ayShow Target set to %s\ax", script, tempSettings.showTarget)
 	elseif cmd == 'showds' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				settings.Options.showDS = true
+				tempSettings.showDS = true
 			elseif args[2] == 'off' then
-				settings.Options.showDS = false
+				tempSettings.showDS = false
 			end
 		else
-			settings.Options.showDS = not settings.Options.showDS
+			tempSettings.showDS = not tempSettings.showDS
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayShow Damage Shield set to %s\ax", script, settings.Options.showDS))
+		printOutput("\aw[\at%s\ax] \ayShow Damage Shield set to %s\ax", script, tempSettings.showDS)
 	elseif cmd == 'history' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				showBattleHistory = true
+				tempSettings.showHistory = true
 			elseif args[2] == 'off' then
-				showBattleHistory = false
+				tempSettings.showHistory = false
 			end
 		else
-			showBattleHistory = not showBattleHistory
+			tempSettings.showHistory = not tempSettings.showHistory
 		end
-		settings.Options.showHistory = showBattleHistory
-		printOutput(string.format("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, showBattleHistory))
+		tempSettings.showHistory = tempSettings.showHistory
+		printOutput("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, tempSettings.showHistory)
 	elseif cmd == 'mymisses' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				settings.Options.showMyMisses = true
+				tempSettings.showMyMisses = true
 			elseif args[2] == 'off' then
-				settings.Options.showMyMisses = false
+				tempSettings.showMyMisses = false
 			end
 		else
-			settings.Options.showMyMisses = not settings.Options.showMyMisses
+			tempSettings.showMyMisses = not tempSettings.showMyMisses
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayShow My Misses set to %s\ax", script, settings.Options.showMyMisses))
+		printOutput("\aw[\at%s\ax] \ayShow My Misses set to %s\ax", script, tempSettings.showMyMisses)
 	elseif cmd == 'missed-me' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				settings.Options.showMissMe = true
+				tempSettings.showMissMe = true
 			elseif args[2] == 'off' then
-				settings.Options.showMissMe = false
+				tempSettings.showMissMe = false
 			end
 		else
-			settings.Options.showMissMe = not settings.Options.showMissMe
+			tempSettings.showMissMe = not tempSettings.showMissMe
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayShow Missed Me set to %s\ax", script, settings.Options.showMissMe))
+		printOutput("\aw[\at%s\ax] \ayShow Missed Me set to %s\ax", script, tempSettings.showMissMe)
 	elseif cmd == 'hitme' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				settings.Options.showHitMe = true
+				tempSettings.showHitMe = true
 			elseif args[2] == 'off' then
-				settings.Options.showHitMe = false
+				tempSettings.showHitMe = false
 			end
 		else
-			settings.Options.showHitMe = not settings.Options.showHitMe
+			tempSettings.showHitMe = not tempSettings.showHitMe
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayShow Hit Me set to %s\ax", script, settings.Options.showHitMe))
+		printOutput("\aw[\at%s\ax] \ayShow Hit Me set to %s\ax", script, tempSettings.showHitMe)
 	elseif cmd == 'sort' then
 		if #args == 2 then
 			if args[2] == 'new' then
-				settings.Options.sortNewest = true
+				tempSettings.sortNewest = true
 			elseif args[2] == 'old' then
-				settings.Options.sortNewest = false
+				tempSettings.sortNewest = false
 			end
 		else
-			settings.Options.sortNewest = not settings.Options.sortNewest
+			tempSettings.sortNewest = not tempSettings.sortNewest
 		end
-		local dir = settings.Options.sortNewest and "Newest" or "Oldest"
-		printOutput(string.format("\aw[\at%s\ax] \aySort Combat Spam\ax \at%s \axOn Top!", script, dir))
+		local dir = tempSettings.sortNewest and "Newest" or "Oldest"
+		printOutput("\aw[\at%s\ax] \aySort Combat Spam\ax \at%s \axOn Top!", script, dir)
 	elseif cmd == 'sorthistory' then
 		if #args == 2 then
 			if args[2] == 'new' then
-				settings.Options.sortHistory = true
+				tempSettings.sortHistory = true
 			elseif args[2] == 'old' then
-				settings.Options.sortHistory = false
+				tempSettings.sortHistory = false
 			end
 		else
-			settings.Options.sortHistory = not settings.Options.sortHistory
+			tempSettings.sortHistory = not tempSettings.sortHistory
 		end
 		battlesHistory = sortTable(battlesHistory, 'history')
-		local dir = settings.Options.sortHistory and "Newest" or "Oldest"
-		printOutput(string.format("\aw[\at%s\ax] \aySorted Battle History\ax \at%s \axOn Top!", script, dir))
+		local dir = tempSettings.sortHistory and "Newest" or "Oldest"
+		printOutput("\aw[\at%s\ax] \aySorted Battle History\ax \at%s \axOn Top!", script, dir)
 	elseif cmd == 'move' then
 		clickThrough = not clickThrough
-		printOutput(string.format("\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough))
+		printOutput("\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough)
 	elseif cmd == 'settings' then
 		pCurrentSettings()
 	elseif cmd == 'report' then
@@ -1121,49 +1145,56 @@ local function processCommand(...)
 	elseif cmd == 'announce' then
 		if #args == 2 then
 			if args[2] == 'on' then
-				settings.Options.announceDNET = true
+				tempSettings.announceDNET = true
 			elseif args[2] == 'off' then
-				settings.Options.announceDNET = false
+				tempSettings.announceDNET = false
 			end
 		else
-			settings.Options.announceDNET = not settings.Options.announceDNET
+			tempSettings.announceDNET = not tempSettings.announceDNET
 		end
-		printOutput(string.format("\aw[\at%s\ax] \ayAnnounce to DanNet Group set to %s\ax", script, settings.Options.announceDNET))
+		printOutput("\aw[\at%s\ax] \ayAnnounce to DanNet Group set to %s\ax", script, tempSettings.announceDNET)
 	elseif #args == 2 and cmd == 'doreporting' then
 		if args[2] == 'battle' then
-			settings.Options.dpsBattleReport = not settings.Options.dpsBattleReport
-			printOutput(string.format("\aw[\at%s\ax] \ayDo DPS Battle Reporting set to %s\ax", script, settings.Options.dpsBattleReport))
+			tempSettings.dpsBattleReport = not tempSettings.dpsBattleReport
+			printOutput("\aw[\at%s\ax] \ayDo DPS Battle Reporting set to %s\ax", script, tempSettings.dpsBattleReport)
 		elseif args[2] == 'time' then
-			settings.Options.dpsTimeSpanReport = not settings.Options.dpsTimeSpanReport
-			printOutput(string.format("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, settings.Options.dpsTimeSpanReport))
+			tempSettings.dpsTimeSpanReport = not tempSettings.dpsTimeSpanReport
+			printOutput("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, tempSettings.dpsTimeSpanReport)
 		elseif args[2] == 'all' then
-			settings.Options.dpsBattleReport = not settings.Options.dpsBattleReport
-			settings.Options.dpsTimeSpanReport = settings.Options.dpsBattleReport
-			printOutput(string.format("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, settings.Options.dpsTimeSpanReport))
+			tempSettings.dpsBattleReport = not tempSettings.dpsBattleReport
+			tempSettings.dpsTimeSpanReport = tempSettings.dpsBattleReport
+			printOutput("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, tempSettings.dpsTimeSpanReport)
 		else
-			printOutput(string.format(
-				"\aw[\at%s\ax] \arInvalid argument, \ayType \at/mydps doreporting\ax takes arguments \aw[\agall\aw|\agbattle\aw|\agtime\aw] \ayplease try again.", script))
+			printOutput(
+				"\aw[\at%s\ax] \arInvalid argument, \ayType \at/mydps doreporting\ax takes arguments \aw[\agall\aw|\agbattle\aw|\agtime\aw] \ayplease try again.", script)
 		end
 	elseif #args == 2 and cmd == "delay" then
 		if tonumber(args[2]) then
-			settings.Options.displayTime = tonumber(args[2])
-			printOutput(string.format("\aw[\at%s\ax] \ayDisplay time set to %s\ax", script, settings.Options.displayTime))
+			tempSettings.displayTime = tonumber(args[2])
+			printOutput("\aw[\at%s\ax] \ayDisplay time set to %s\ax", script, tempSettings.displayTime)
 		else
-			printOutput(string.format("\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script))
+			printOutput("\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script)
 		end
 	elseif #args == 2 and cmd == "battledelay" then
 		if tonumber(args[2]) then
-			settings.Options.battleDuration = tonumber(args[2])
-			printOutput(string.format("\aw[\at%s\ax] \ayBattle Duration time set to %s\ax", script, settings.Options.battleDuration))
+			tempSettings.battleDuration = tonumber(args[2])
+			printOutput("\aw[\at%s\ax] \ayBattle Duration time set to %s\ax", script, tempSettings.battleDuration)
 		else
-			printOutput(string.format("\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script))
+			printOutput("\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script)
 		end
 	elseif cmd == "help" then
 		pHelp()
 	else
-		printOutput(string.format("\aw[\at%s\ax] \arUnknown command, \ayType /mydps help for a list of commands.", script))
+		printOutput("\aw[\at%s\ax] \arUnknown command, \ayType /mydps help for a list of commands.", script)
 	end
-	mq.pickle(configFile, settings)
+	local changed = false
+	for k, v in pairs(tempSettings) do
+		settings.Options[k] = v
+		changed = true
+	end
+	if changed then
+		mq.pickle(configFile, settings)
+	end
 end
 
 --create mailbox for actors to send messages to
@@ -1247,12 +1278,12 @@ local function Init()
 	-- Check for arguments
 	if args[1] ~= nil and args[1] == "start" then
 		if #args == 2 and args[2] == 'hide' then
-			showCombatWindow = false
+			tempSettings.showCombatWindow = false
 		end
 		started = true
 		clickThrough = true
 		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
-		printOutput(string.format("\aw[\at%s\ax] \ayStarted\ax", script))
+		printOutput("\aw[\at%s\ax] \ayStarted\ax", script)
 	end
 end
 
@@ -1262,15 +1293,15 @@ local function Loop()
 	while RUNNING do
 		-- Make sure we are still in game or exit the script.
 		if mq.TLO.EverQuest.GameState() ~= "INGAME" then
-			printOutput(string.format("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script))
+			printOutput("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script)
 			mq.exit()
 		end
 
-		if doActors ~= settings.Options.announceActors then
+		if tempSettings.doActors ~= settings.Options.announceActors then
 			if settings.Options.announceActors then
 				RegisterActor()
 			end
-			doActors = settings.Options.announceActors
+			tempSettings.doActors = settings.Options.announceActors
 		end
 
 		if started then
@@ -1312,17 +1343,17 @@ local function Loop()
 		end
 		cleanTable()
 		workingTable = sortTable(damTable, 'combat')
-		if doActors and uiTime == 1 then actorsWorking = sortTable(actorsTable, 'party') end
-		if sortParty then
+		if tempSettings.doActors and uiTime == 1 then actorsWorking = sortTable(actorsTable, 'party') end
+		if tempSettings.sortParty then
 			actorsWorking = actorsTable
 		end
 
 		mq.doevents()
 		mq.delay(5)
-		if sortParty then
+		if tempSettings.sortParty then
 			uiTime = uiTime + 5
 			if uiTime >= 34 then
-				if doActors then actorsWorking = sortTable(actorsTable, 'party') end
+				if tempSettings.doActors then actorsWorking = sortTable(actorsTable, 'party') end
 				uiTime = 0
 			end
 		end
@@ -1330,8 +1361,9 @@ local function Loop()
 end
 -- Make sure we are in game before running the script
 if mq.TLO.EverQuest.GameState() ~= "INGAME" then
-	printOutput(string.format("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script))
+	printOutput("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script)
 	mq.exit()
 end
+
 Init()
 Loop()
