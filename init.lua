@@ -1,14 +1,28 @@
 local mq = require('mq')
 local ImGui = require('ImGui')
-local actors = require('actors')
-local ActorDPS
+local Module = {}
+Module.ActorMailBox = 'my_dps'
+Module.Name = 'MyDPS'
+Module.IsRunning = false
+---@diagnostic disable-next-line:undefined-global
+local loadedExeternally = MyUI_ScriptName ~= nil and true or false
+
+if not loadedExeternally then
+	MyUI_Utils = require('lib.common')
+	MyUI_ThemeLoader = require('lib.theme_loader')
+	MyUI_Actor = require('actors')
+	MyUI_CharLoaded = mq.TLO.Me.DisplayName()
+	MyUI_Server = mq.TLO.MacroQuest.Server()
+	Module.ImgPath = mq.TLO.Lua.Dir() .. "/chatrelay/images/phone.png"
+end
+
+local LoadTheme = MyUI_ThemeLoader
+local ActorDPS = nil
 local script = 'MyDPS'
-local configFile = string.format("%s/MyUI/%s/%s/%s.lua", mq.configDir, script, mq.TLO.EverQuest.Server(), mq.TLO.Me.Name())
-local RUNNING = true
-local damTable, settings = {}, {}
-local MyName = mq.TLO.Me.CleanName()
-local winFlags = bit32.bor(ImGuiWindowFlags.None,
-	ImGuiWindowFlags.NoTitleBar)
+local configFile = string.format("%s/MyUI/%s/%s/%s.lua", mq.configDir, script, MyUI_Server, MyUI_CharLoaded)
+local themeFile = string.format('%s/MyUI/MyThemeZ.lua', mq.configDir)
+local damTable, settings, theme = {}, {}, {}
+local winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
 local started = false
 local clickThrough = false
 local tableSize = 0
@@ -20,6 +34,7 @@ local workingTable, battlesHistory, actorsTable, actorsWorking = {}, {}, {}, {}
 local enteredCombat = false
 local battleStartTime, leftCombatTime = 0, 0
 local firstRun = true
+local themeName, themeID = "Default", 1
 local tempSettings = {}
 local defaults = {
 	Options = {
@@ -45,6 +60,8 @@ local defaults = {
 		announceActors         = false,
 		sortParty              = false,
 		showCombatWindow       = true,
+		useTheme               = 'Default',
+		autoStart              = false,
 	},
 	MeleeColors = {
 		["crush"] = { 1, 1, 1, 1, },
@@ -66,43 +83,25 @@ local defaults = {
 	},
 }
 
-
-local function printOutput(msg, ...)
-	msg = string.format(msg, ...)
-	---@diagnostic disable-next-line: undefined-field
-	local useMyChat = mq.TLO.MyChatTlo ~= nil and true or false
-	if not useMyChat then
-		printf(msg)
+local function loadThemeTable()
+	if MyUI_Utils.File.Exists(themeFile) then
+		theme = dofile(themeFile)
 	else
-		---@diagnostic disable-next-line: undefined-field
-		mq.TLO.MyChatTlo(script, msg)
+		theme = require('defaults.themes') -- your local themes file incase the user doesn't have one in config folder
+		mq.pickle(themeFile, theme)
 	end
-end
-
-local function File_Exists(name)
-	local f = io.open(name, "r")
-	if f ~= nil then
-		io.close(f)
-		return true
-	else
-		return false
-	end
-end
-
-local function CheckRemovedSettings(def, settings)
-	local newSetting = false
-	for setting, value in pairs(settings or {}) do
-		if def[setting] == nil then
-			printOutput("\ayFound Depreciated Setting: \ao%s \ayRemoving it from the Settings File.", setting)
-			settings[setting] = nil
-			newSetting = true
+	themeName = settings.Options.useTheme or 'Default'
+	if theme and theme.Theme then
+		for tID, tData in pairs(theme.Theme) do
+			if tData['Name'] == themeName then
+				themeID = tID
+			end
 		end
 	end
-	return newSetting
 end
 
 local function loadSettings()
-	if not File_Exists(configFile) then
+	if not MyUI_Utils.File.Exists(configFile) then
 		settings = defaults
 		mq.pickle(configFile, settings)
 	else
@@ -113,25 +112,17 @@ local function loadSettings()
 		end
 	end
 
+	loadThemeTable()
+
 	local newSetting = false
 
 	-- check for new settings
-	for k, v in pairs(defaults.MeleeColors) do
-		if settings.MeleeColors[k] == nil then
-			settings.MeleeColors[k] = v
-			newSetting = true
-		end
-	end
+	newSetting = MyUI_Utils.CheckRemovedSettings(defaults.MeleeColors, settings.MeleeColors) or newSetting
+	newSetting = MyUI_Utils.CheckRemovedSettings(defaults.Options, settings.Options) or newSetting
 
-	for k, v in pairs(defaults.Options) do
-		if settings.Options[k] == nil then
-			settings.Options[k] = v
-			newSetting = true
-		end
-	end
 	-- check for removed settings
-	newSetting = CheckRemovedSettings(defaults.Options, settings.Options) and true or newSetting
-	newSetting = CheckRemovedSettings(defaults.MeleeColors, settings.MeleeColors) and true or newSetting
+	newSetting = MyUI_Utils.CheckRemovedSettings(defaults.Options, settings.Options) or newSetting
+	newSetting = MyUI_Utils.CheckRemovedSettings(defaults.MeleeColors, settings.MeleeColors) or newSetting
 
 	-- set local settings
 	for k, v in pairs(settings.Options or {}) do
@@ -208,13 +199,25 @@ local function parseCurrentBattle(dur)
 				})
 		end
 		battlesHistory = sortTable(battlesHistory, 'history')
-		if settings.Options.announceActors then
-			ActorDPS:send({ mailbox = 'my_dps', }, ({ Name = MyName, Subject = 'CURRENT', BattleNum = -2, DPS = dps,
-				TimeSpan = dur, TotalDmg = dmgTotalBattle, AvgDmg = avgDmg, Remove = false, Crit = critTotalBattle, CritHeals = critHealsTotal, }))
+		if settings.Options.announceActors and ActorDPS ~= nil then
+			local msgSend = {
+				Name = MyUI_CharLoaded,
+				Subject = 'CURRENT',
+				BattleNum = -2,
+				DPS = dps,
+				TimeSpan = dur,
+				TotalDmg = dmgTotalBattle,
+				AvgDmg = avgDmg,
+				Remove = false,
+				Crit = critTotalBattle,
+				CritHeals = critHealsTotal,
+			}
+			ActorDPS:send({ mailbox = 'my_dps', script = 'mydps', }, (msgSend))
+			ActorDPS:send({ mailbox = 'my_dps', script = 'myui', }, (msgSend))
 			local found = false
 			for k, v in pairs(actorsTable) do
-				if v.name == MyName then
-					v.name      = MyName
+				if v.name == MyUI_CharLoaded then
+					v.name      = MyUI_CharLoaded
 					v.sequence  = -2
 					v.dps       = dps
 					v.dur       = dur
@@ -228,7 +231,7 @@ local function parseCurrentBattle(dur)
 			end
 			if not found then
 				table.insert(actorsTable, {
-					name      = MyName,
+					name      = MyUI_CharLoaded,
 					sequence  = -2,
 					dps       = dps,
 					dur       = dur,
@@ -549,8 +552,8 @@ local function DrawHistory(tbl)
 				local textColor = color.white
 				ImGui.TableNextRow()
 				ImGui.TableNextColumn()
-				textColor = data.name == MyName and color.teal or color.white
-				ImGui.TextColored(textColor, "%s", data.name ~= nil and data.name or MyName)
+				textColor = data.name == MyUI_CharLoaded and color.teal or color.white
+				ImGui.TextColored(textColor, "%s", data.name ~= nil and data.name or MyUI_CharLoaded)
 				ImGui.TableNextColumn()
 				textColor = seq == "Current" and color.yellow or color.orange
 				ImGui.TextColored(textColor, "%s", seq)
@@ -573,6 +576,8 @@ local function DrawHistory(tbl)
 end
 
 local function DrawButtons()
+	local changedSettings = false
+
 	local btnLabel = started and "Stop" or "Start"
 	if ImGui.Button(btnLabel) then
 		if started then
@@ -582,22 +587,24 @@ local function DrawButtons()
 			clickThrough = true
 			started = true
 		end
-		settings.Options.fontScale = tempSettings.fontScale
-		mq.pickle(configFile, settings)
+		tempSettings.autoStart = started
+		changedSettings = true
 	end
 	if ImGui.IsItemHovered() then
 		ImGui.SetTooltip("%s the DPS Window.", btnLabel)
 	end
+
 	ImGui.SameLine()
+
 	local btnLabel2 = tempSettings.showCombatWindow and "Hide" or "Show"
 	if ImGui.Button(btnLabel2) then
-		mq.pickle(configFile, settings)
 		tempSettings.showCombatWindow = not tempSettings.showCombatWindow
+		changedSettings = true
 	end
 	if ImGui.IsItemHovered() then
 		ImGui.SetTooltip("%s the DPS Window.", btnLabel2)
 	end
-	local changedSettings = false
+
 	for k, v in pairs(tempSettings or {}) do
 		if settings.Options[k] ~= nil then
 			settings.Options[k] = v
@@ -733,11 +740,59 @@ local function DrawOptions()
 		ImGui.SameLine()
 		ImGui.HelpMarker("Set the font scale for the CombatSpam window.")
 	end
+
+	if ImGui.CollapsingHeader("Theme Setting") then
+		ImGui.Text("Cur Theme: %s", themeName)
+		-- Combo Box Load Theme
+		if ImGui.BeginCombo("Load Theme##DialogDB", themeName) then
+			for k, data in pairs(theme.Theme) do
+				local isSelected = data.Name == themeName
+				if ImGui.Selectable(data.Name, isSelected) then
+					tempSettings.useTheme = data.Name
+					themeID = k
+					themeName = tempSettings.useTheme
+				end
+			end
+			ImGui.EndCombo()
+		end
+
+		if ImGui.Button('Reload Theme File') then
+			loadThemeTable()
+		end
+	end
 	DrawButtons()
 end
 
-local function Draw_GUI()
-	if not RUNNING then return end
+local function DrawTheme(tName)
+	local StyleCounter = 0
+	local ColorCounter = 0
+	if tName == "Default" then return ColorCounter, StyleCounter end
+	for tID, tData in pairs(theme.Theme) do
+		if tData.Name == tName then
+			for pID, cData in pairs(theme.Theme[tID].Color) do
+				ImGui.PushStyleColor(pID, ImVec4(cData.Color[1], cData.Color[2], cData.Color[3], cData.Color[4]))
+				ColorCounter = ColorCounter + 1
+			end
+			if tData['Style'] ~= nil then
+				if next(tData['Style']) ~= nil then
+					for sID, sData in pairs(theme.Theme[tID].Style) do
+						if sData.Size ~= nil then
+							ImGui.PushStyleVar(sID, sData.Size)
+							StyleCounter = StyleCounter + 1
+						elseif sData.X ~= nil then
+							ImGui.PushStyleVar(sID, sData.X, sData.Y)
+							StyleCounter = StyleCounter + 1
+						end
+					end
+				end
+			end
+		end
+	end
+	return ColorCounter, StyleCounter
+end
+
+function Module.RenderGUI()
+	if not Module.IsRunning then return end
 	if tempSettings.showCombatWindow then
 		ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
 		local bgColor = tempSettings.bgColor
@@ -746,9 +801,9 @@ local function Draw_GUI()
 		else
 			ImGui.PushStyleColor(ImGuiCol.WindowBg, ImVec4(0.1, 0.1, 0.1, 0.9))
 		end
-		local isWindowOpen, showWin = ImGui.Begin(script .. "##" .. mq.TLO.Me.Name(), true, winFlags)
+		local isWindowOpen, showWin = ImGui.Begin(script .. "##" .. MyUI_CharLoaded, true, winFlags)
 		if not isWindowOpen then
-			RUNNING = false
+			Module.IsRunning = false
 		end
 		if showWin then
 			ImGui.SetWindowFontScale(tempSettings.spamFontScale)
@@ -794,13 +849,14 @@ local function Draw_GUI()
 	end
 
 	if tempSettings.showHistory then
+		local ColorCount, StyleCount = DrawTheme(themeName)
 		ImGui.SetNextWindowSize(400, 200, ImGuiCond.FirstUseEver)
-		local openReport, showReport = ImGui.Begin("DPS Report##" .. mq.TLO.Me.Name(), true, ImGuiWindowFlags.None)
+		local openReport, showReport = ImGui.Begin("DPS Report##" .. MyUI_CharLoaded, true, ImGuiWindowFlags.None)
 		if not openReport then
 			tempSettings.showHistory = false
 			settings.Options.showHistory = false
 			mq.pickle(configFile, settings)
-			printOutput("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, tempSettings.showHistory)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, tempSettings.showHistory)
 		end
 		if showReport then
 			if ImGui.BeginTabBar("MyDPS##") then
@@ -818,6 +874,7 @@ local function Draw_GUI()
 				ImGui.EndTabBar()
 			end
 		end
+		LoadTheme.EndTheme(ColorCount, StyleCount)
 		ImGui.End()
 	end
 end
@@ -879,8 +936,8 @@ local function pHelp()
 		[27] = string.format("\aw[\at%s\ax] \ay/mydps help\ax - Show this help.", script)
 		,
 	}
-	for i = 1, 27 do
-		printOutput(help[i])
+	for i = 1, #help do
+		MyUI_Utils.PrintOutput('MyDPS', nil, help[i])
 	end
 end
 
@@ -889,10 +946,10 @@ local function pCurrentSettings()
 	for k, v in pairs(settings.Options) do
 		if k == "bgColor" then
 			msg = string.format("\aw[\at%s\ax] \ay%s\ax = {\ar%s\ax, \ag%s\ax, \at%s\ax,\ao %s\ax}", script, k, v[1], v[2], v[3], v[4])
-			printOutput(msg)
+			MyUI_Utils.PrintOutput('MyDPS', nil, msg)
 		else
 			msg = string.format("\aw[\at%s\ax] \ay%s\ax = \at%s", script, k, v)
-			printOutput(msg)
+			MyUI_Utils.PrintOutput('MyDPS', nil, msg)
 		end
 	end
 end
@@ -908,7 +965,7 @@ end
 ---@param rType string @ type of report (ALL, COMBAT)
 local function pDPS(dur, rType)
 	if dur == nil then
-		printOutput("\aw[\at%s\ax] \ayNothing to Report! Try again later.", script)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayNothing to Report! Try again later.", script)
 		return
 	end
 	if rType:lower() == "all" then
@@ -929,9 +986,9 @@ local function pDPS(dur, rType)
 			"\aw[\at%s\ax] \ayDPS \ax(\agALL\ax): \ag%.2f\ax, \ayTimeSpan: \ax\ao%.2f min\ax, \ayTotal Damage: \ax\ao%d\ax, \ayTotal Attempts: \ax\ao%d\ax, \ayAverage:\ax \ao%d\ax",
 			script, grandDPS, (dur / 60), grandTotal, grandCounter, grangAvg)
 
-		printOutput(msgNoDS)
-		printOutput(msgDS)
-		printOutput(msgALL)
+		MyUI_Utils.PrintOutput('MyDPS', nil, msgNoDS)
+		MyUI_Utils.PrintOutput('MyDPS', nil, msgDS)
+		MyUI_Utils.PrintOutput('MyDPS', nil, msgALL)
 
 		if settings.Options.announceDNET then
 			announceDanNet(msgNoDS)
@@ -951,17 +1008,30 @@ local function pDPS(dur, rType)
 		if settings.Options.dpsBattleReport then
 			local msg = string.format(
 				"\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayDPS \ax(\aoBATTLE\ax): \at%s\ax, \ayTimeSpan:\ax\ao %.0f sec\ax, \ayTotal Damage: \ax\ao%s\ax, \ayAvg. Damage: \ax\ao%s\ax",
-				script, MyName, cleanNumber(dps, 1, true), dur, cleanNumber(dmgTotalBattle, 2), cleanNumber(avgDmg, 1, true))
-			printOutput(msg)
+				script, MyUI_CharLoaded, cleanNumber(dps, 1, true), dur, cleanNumber(dmgTotalBattle, 2), cleanNumber(avgDmg, 1, true))
+			MyUI_Utils.PrintOutput('MyDPS', nil, msg)
 			if settings.Options.announceDNET then
 				announceDanNet(msg)
 			end
-			if settings.Options.announceActors then
-				ActorDPS:send({ mailbox = 'my_dps', }, ({ Name = MyName, Subject = 'Update', BattleNum = -3,
-					DPS = dps, TimeSpan = dur, TotalDmg = dmgTotalBattle, AvgDmg = avgDmg, Remove = false, Crit = critTotalBattle, CritHeals = critHealsTotal, }))
+			if settings.Options.announceActors and ActorDPS ~= nil then
+				local msgSend = {
+					Name = MyUI_CharLoaded,
+					Subject = 'Update',
+					BattleNum = -3,
+					DPS = dps,
+					TimeSpan = dur,
+					TotalDmg = dmgTotalBattle,
+					AvgDmg = avgDmg,
+					Remove = false,
+					Crit = critTotalBattle,
+					CritHeals = critHealsTotal,
+					Report = msg,
+				}
+				ActorDPS:send({ mailbox = 'my_dps', script = 'mydps', }, (msgSend))
+				ActorDPS:send({ mailbox = 'my_dps', script = 'myui', }, (msgSend))
 				for k, v in ipairs(actorsTable) do
-					if v.name == MyName then
-						v.name      = MyName
+					if v.name == MyUI_CharLoaded then
+						v.name      = MyUI_CharLoaded
 						v.sequence  = -3
 						v.dps       = dps
 						v.dur       = dur
@@ -981,14 +1051,14 @@ end
 
 local function pBattleHistory()
 	if battleCounter == 0 then
-		printOutput("\aw[\at%s\ax] \ayNo Battle History\ax", script)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayNo Battle History\ax", script)
 		return
 	end
 	for i, v in ipairs(battlesHistory) do
 		local msg = string.format(
 			"\aw[\at%s\ax] \ayChar:\ax\ao %s\ax, \ayBattle: \ax\ao%d\ax, \ayDPS: \ax\at%s\ax, \ayDuration: \ax\ao%s sec\ax, \ayTotal Damage: \ax\ao%s\ax, \ayAvg. Damage: \ax\ao%s\ax",
-			script, MyName, v.sequence, cleanNumber(v.dps, 1, true), v.dur, cleanNumber(v.dmg, 2), cleanNumber(v.avg, 1, true))
-		printOutput(msg)
+			script, MyUI_CharLoaded, v.sequence, cleanNumber(v.dps, 1, true), v.dur, cleanNumber(v.dmg, 2), cleanNumber(v.avg, 1, true))
+		MyUI_Utils.PrintOutput('MyDPS', nil, msg)
 		if settings.Options.announceDNET then
 			announceDanNet(msg)
 		end
@@ -998,13 +1068,13 @@ end
 local function processCommand(...)
 	local args = { ..., }
 	if #args == 0 then
-		printOutput("\aw[\at%s\ax] \arInvalid command, \ayType /mydps help for a list of commands.", script)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \arInvalid command, \ayType /mydps help for a list of commands.", script)
 		return
 	end
 	local cmd = args[1]
 	cmd = cmd:lower()
 	if cmd == "exit" then
-		RUNNING = false
+		Module.IsRunning = false
 	elseif cmd == "ui" then
 		started = false
 		tempSettings.showCombatWindow = true
@@ -1017,18 +1087,18 @@ local function processCommand(...)
 				tempSettings.showCombatWindow = true
 			end
 		end
-		printOutput("\aw[\at%s\ax] \ayToggle Combat Spam set to %s\ax", script, tempSettings.showCombatWindow)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayToggle Combat Spam set to %s\ax", script, tempSettings.showCombatWindow)
 	elseif cmd == "clear" then
 		damTable, battlesHistory             = {}, {}
 		battleStartTime, dpsStartTime        = 0, 0
 		dmgTotal, dmgCounter, dsCounter      = 0, 0, 0
 		dmgTotalDS, battleCounter, tableSize = 0, 0, 0
-		printOutput("\aw[\at%s\ax] \ayTable Cleared\ax", script)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayTable Cleared\ax", script)
 	elseif cmd == 'start' then
 		started = true
 		clickThrough = true
 		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
-		printOutput("\aw[\at%s\ax] \ayStarted\ax", script)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayStarted\ax", script)
 	elseif cmd == 'showtype' then
 		if #args == 2 then
 			if args[2] == 'on' then
@@ -1039,7 +1109,7 @@ local function processCommand(...)
 		else
 			tempSettings.showType = not tempSettings.showType
 		end
-		printOutput("\aw[\at%s\ax] \ayShow Type set to %s\ax", script, tempSettings.showType)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow Type set to %s\ax", script, tempSettings.showType)
 	elseif cmd == 'showtarget' then
 		if #args == 2 then
 			if args[2] == 'on' then
@@ -1050,7 +1120,7 @@ local function processCommand(...)
 		else
 			tempSettings.showTarget = not tempSettings.showTarget
 		end
-		printOutput("\aw[\at%s\ax] \ayShow Target set to %s\ax", script, tempSettings.showTarget)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow Target set to %s\ax", script, tempSettings.showTarget)
 	elseif cmd == 'showds' then
 		if #args == 2 then
 			if args[2] == 'on' then
@@ -1061,7 +1131,7 @@ local function processCommand(...)
 		else
 			tempSettings.showDS = not tempSettings.showDS
 		end
-		printOutput("\aw[\at%s\ax] \ayShow Damage Shield set to %s\ax", script, tempSettings.showDS)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow Damage Shield set to %s\ax", script, tempSettings.showDS)
 	elseif cmd == 'history' then
 		if #args == 2 then
 			if args[2] == 'on' then
@@ -1073,7 +1143,7 @@ local function processCommand(...)
 			tempSettings.showHistory = not tempSettings.showHistory
 		end
 		tempSettings.showHistory = tempSettings.showHistory
-		printOutput("\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, tempSettings.showHistory)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow Battle History set to %s\ax", script, tempSettings.showHistory)
 	elseif cmd == 'mymisses' then
 		if #args == 2 then
 			if args[2] == 'on' then
@@ -1084,7 +1154,7 @@ local function processCommand(...)
 		else
 			tempSettings.showMyMisses = not tempSettings.showMyMisses
 		end
-		printOutput("\aw[\at%s\ax] \ayShow My Misses set to %s\ax", script, tempSettings.showMyMisses)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow My Misses set to %s\ax", script, tempSettings.showMyMisses)
 	elseif cmd == 'missed-me' then
 		if #args == 2 then
 			if args[2] == 'on' then
@@ -1095,7 +1165,7 @@ local function processCommand(...)
 		else
 			tempSettings.showMissMe = not tempSettings.showMissMe
 		end
-		printOutput("\aw[\at%s\ax] \ayShow Missed Me set to %s\ax", script, tempSettings.showMissMe)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow Missed Me set to %s\ax", script, tempSettings.showMissMe)
 	elseif cmd == 'hitme' then
 		if #args == 2 then
 			if args[2] == 'on' then
@@ -1106,7 +1176,7 @@ local function processCommand(...)
 		else
 			tempSettings.showHitMe = not tempSettings.showHitMe
 		end
-		printOutput("\aw[\at%s\ax] \ayShow Hit Me set to %s\ax", script, tempSettings.showHitMe)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayShow Hit Me set to %s\ax", script, tempSettings.showHitMe)
 	elseif cmd == 'sort' then
 		if #args == 2 then
 			if args[2] == 'new' then
@@ -1118,7 +1188,7 @@ local function processCommand(...)
 			tempSettings.sortNewest = not tempSettings.sortNewest
 		end
 		local dir = tempSettings.sortNewest and "Newest" or "Oldest"
-		printOutput("\aw[\at%s\ax] \aySort Combat Spam\ax \at%s \axOn Top!", script, dir)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \aySort Combat Spam\ax \at%s \axOn Top!", script, dir)
 	elseif cmd == 'sorthistory' then
 		if #args == 2 then
 			if args[2] == 'new' then
@@ -1131,10 +1201,10 @@ local function processCommand(...)
 		end
 		battlesHistory = sortTable(battlesHistory, 'history')
 		local dir = tempSettings.sortHistory and "Newest" or "Oldest"
-		printOutput("\aw[\at%s\ax] \aySorted Battle History\ax \at%s \axOn Top!", script, dir)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \aySorted Battle History\ax \at%s \axOn Top!", script, dir)
 	elseif cmd == 'move' then
 		clickThrough = not clickThrough
-		printOutput("\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayClick Through set to %s\ax", script, clickThrough)
 	elseif cmd == 'settings' then
 		pCurrentSettings()
 	elseif cmd == 'report' then
@@ -1152,40 +1222,40 @@ local function processCommand(...)
 		else
 			tempSettings.announceDNET = not tempSettings.announceDNET
 		end
-		printOutput("\aw[\at%s\ax] \ayAnnounce to DanNet Group set to %s\ax", script, tempSettings.announceDNET)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayAnnounce to DanNet Group set to %s\ax", script, tempSettings.announceDNET)
 	elseif #args == 2 and cmd == 'doreporting' then
 		if args[2] == 'battle' then
 			tempSettings.dpsBattleReport = not tempSettings.dpsBattleReport
-			printOutput("\aw[\at%s\ax] \ayDo DPS Battle Reporting set to %s\ax", script, tempSettings.dpsBattleReport)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayDo DPS Battle Reporting set to %s\ax", script, tempSettings.dpsBattleReport)
 		elseif args[2] == 'time' then
 			tempSettings.dpsTimeSpanReport = not tempSettings.dpsTimeSpanReport
-			printOutput("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, tempSettings.dpsTimeSpanReport)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, tempSettings.dpsTimeSpanReport)
 		elseif args[2] == 'all' then
 			tempSettings.dpsBattleReport = not tempSettings.dpsBattleReport
 			tempSettings.dpsTimeSpanReport = tempSettings.dpsBattleReport
-			printOutput("\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, tempSettings.dpsTimeSpanReport)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayDo DPS Reporting set to %s\ax", script, tempSettings.dpsTimeSpanReport)
 		else
-			printOutput(
+			MyUI_Utils.PrintOutput('MyDPS', nil,
 				"\aw[\at%s\ax] \arInvalid argument, \ayType \at/mydps doreporting\ax takes arguments \aw[\agall\aw|\agbattle\aw|\agtime\aw] \ayplease try again.", script)
 		end
 	elseif #args == 2 and cmd == "delay" then
 		if tonumber(args[2]) then
 			tempSettings.displayTime = tonumber(args[2])
-			printOutput("\aw[\at%s\ax] \ayDisplay time set to %s\ax", script, tempSettings.displayTime)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayDisplay time set to %s\ax", script, tempSettings.displayTime)
 		else
-			printOutput("\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script)
 		end
 	elseif #args == 2 and cmd == "battledelay" then
 		if tonumber(args[2]) then
 			tempSettings.battleDuration = tonumber(args[2])
-			printOutput("\aw[\at%s\ax] \ayBattle Duration time set to %s\ax", script, tempSettings.battleDuration)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayBattle Duration time set to %s\ax", script, tempSettings.battleDuration)
 		else
-			printOutput("\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script)
+			MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \arInvalid argument, \ayType /mydps help for a list of commands.", script)
 		end
 	elseif cmd == "help" then
 		pHelp()
 	else
-		printOutput("\aw[\at%s\ax] \arUnknown command, \ayType /mydps help for a list of commands.", script)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \arUnknown command, \ayType /mydps help for a list of commands.", script)
 	end
 	local changed = false
 	for k, v in pairs(tempSettings) do
@@ -1199,7 +1269,7 @@ end
 
 --create mailbox for actors to send messages to
 local function RegisterActor()
-	ActorDPS = actors.register('my_dps', function(message)
+	ActorDPS = MyUI_Actor.register(Module.ActorMailBox, function(message)
 		local MemberEntry  = message()
 		local who          = MemberEntry.Name
 		local timeSpan     = MemberEntry.TimeSpan or 0
@@ -1209,8 +1279,8 @@ local function RegisterActor()
 		local battleNum    = MemberEntry.BattleNum or 0
 		local critDmg      = MemberEntry.Crit or 0
 		local critHealsAmt = MemberEntry.CritHeals or 0
-
-		if who == MyName then return end
+		local report       = MemberEntry.Report or ''
+		if who == MyUI_CharLoaded then return end
 		if #actorsTable == 0 then
 			table.insert(actorsTable, { name = who, dps = dps, avg = avgDmg, dmg = totalDmg, dur = timeSpan, sequence = battleNum, crit = critDmg, critHeals = critHealsAmt, })
 		else
@@ -1237,24 +1307,54 @@ local function RegisterActor()
 				table.insert(actorsTable, { name = who, dps = dps, avg = avgDmg, dmg = totalDmg, dur = timeSpan, sequence = battleNum, crit = critDmg, critHeals = critHealsAmt, })
 			end
 		end
+		if report ~= '' and who ~= MyUI_CharLoaded then
+			MyUI_Utils.PrintOutput('MyDPS', nil, report)
+		end
 	end)
 end
 
-local args = { ..., }
+function Module.Unload()
+	mq.unevent("melee_crit")
+	mq.unevent("melee_crit2")
+	mq.unevent("melee_crit3")
+	mq.unevent("melee_deadly_strike")
+	mq.unevent("melee_non_melee")
+	mq.unevent("melee_damage_shield")
+	mq.unevent("melee_you_hit_non-melee")
+	mq.unevent("melee_do_damage")
+	mq.unevent("melee_miss")
+	mq.unevent("melee_got_hit")
+	mq.unevent("melee_missed_me")
+	mq.unevent("melee_crit_heal")
+	mq.unbind("/mydps")
+end
+
+local Arguments = { ..., }
+
+local function CheckArgs(args)
+	if args[1] ~= nil and args[1] == "start" then
+		if #args == 2 and args[2] == 'hide' then
+			tempSettings.showCombatWindow = false
+		end
+		started = true
+		clickThrough = true
+		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
+		MyUI_Utils.PrintOutput('MyDPS', nil, "\aw[\at%s\ax] \ayStarted\ax", script)
+	end
+end
+
 local function Init()
 	loadSettings()
 
-	MyName = mq.TLO.Me.CleanName()
-
 	-- Register Events
-	local str = string.format("#*#%s scores a critical hit! #*#(#1#)", MyName)
+	local str = string.format("#*#%s scores a critical hit! #*#(#1#)", MyUI_CharLoaded)
 
 	mq.event("melee_crit", "#*#You score a critical hit! #*#(#1#)", critCallBack)
 	mq.event("melee_crit2", "#*#You deliver a critical blast! #*#(#1#)", critCallBack)
 	mq.event("melee_crit3", str, critCallBack)
-	str = string.format("#*#%s scores a Deadly Strike! #*#(#1#)", MyName)
+	str = string.format("#*#%s scores a Deadly Strike! #*#(#1#)", MyUI_CharLoaded)
 	mq.event("melee_deadly_strike", str, critCallBack)
-	str = string.format("#*#%s hit #1# for #2# points of non-melee damage#*#", MyName)
+	str = string.format("#*#%s hit #1# for #2# points of non-melee damage#*#", MyUI_CharLoaded)
 	mq.event("melee_non_melee", str, nonMeleeClallBack)
 	mq.event("melee_damage_shield", "#*# was hit by non-melee for #2# points of damage#*#", nonMeleeClallBack)
 	mq.event("melee_you_hit_non-melee", "#*#You were hit by non-melee for #2# damage#*#", nonMeleeClallBack)
@@ -1265,10 +1365,6 @@ local function Init()
 	mq.event("melee_crit_heal", "#*#You perform an exceptional heal! #*#(#1#)", critHealCallBack)
 	mq.bind("/mydps", processCommand)
 
-
-	-- Initialize ImGui
-	mq.imgui.init(script, Draw_GUI)
-
 	-- Register Actor Mailbox
 	if settings.Options.announceActors then RegisterActor() end
 
@@ -1276,94 +1372,108 @@ local function Init()
 	pHelp()
 
 	-- Check for arguments
-	if args[1] ~= nil and args[1] == "start" then
-		if #args == 2 and args[2] == 'hide' then
-			tempSettings.showCombatWindow = false
-		end
-		started = true
-		clickThrough = true
-		winFlags = bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration)
-		printOutput("\aw[\at%s\ax] \ayStarted\ax", script)
+	if not loadedExeternally then
+		CheckArgs(Arguments)
+	else
+		started = settings.Options.autoStart
+		clickThrough = started
+	end
+
+	Module.IsRunning = true
+	if not loadedExeternally then
+		mq.imgui.init(script, Module.RenderGUI)
+		Module.LocalLoop()
 	end
 end
 
-local function Loop()
-	local uiTime = 1
+local clockTimer = mq.gettime()
+
+function Module.MainLoop()
 	-- Main Loop
-	while RUNNING do
-		-- Make sure we are still in game or exit the script.
-		if mq.TLO.EverQuest.GameState() ~= "INGAME" then
-			printOutput("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script)
-			mq.exit()
-		end
+	if loadedExeternally then
+		---@diagnostic disable-next-line: undefined-global
+		if not MyUI_LoadModules.CheckRunning(Module.IsRunning, Module.Name) then return end
+	end
 
-		if tempSettings.doActors ~= settings.Options.announceActors then
-			if settings.Options.announceActors then
-				RegisterActor()
-			end
-			tempSettings.doActors = settings.Options.announceActors
+	if tempSettings.doActors ~= settings.Options.announceActors then
+		if settings.Options.announceActors then
+			RegisterActor()
 		end
+		tempSettings.doActors = settings.Options.announceActors
+	end
 
-		if started then
-			winFlags = clickThrough and bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration) or bit32.bor(ImGuiWindowFlags.NoDecoration)
-		else
-			winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
-		end
+	if started then
+		winFlags = clickThrough and bit32.bor(ImGuiWindowFlags.NoMouseInputs, ImGuiWindowFlags.NoDecoration) or bit32.bor(ImGuiWindowFlags.NoDecoration)
+	else
+		winFlags = bit32.bor(ImGuiWindowFlags.None, ImGuiWindowFlags.NoTitleBar)
+	end
 
-		local currentTime = os.time()
-		if currentTime - dpsStartTime >= settings.Options.dpsTimeSpanReportTimer then
-			local dur = currentTime - dpsStartTime
-			if settings.Options.dpsTimeSpanReport then
-				pDPS(dur, 'ALL')
-			end
-		end
-
-		if mq.TLO.Me.CombatState() ~= 'COMBAT' and enteredCombat then
-			if leftCombatTime == 0 then
-				leftCombatTime = os.time()
-			end
-
-			local endOfCombat = os.time() - leftCombatTime
-			if endOfCombat > settings.Options.battleDuration then
-				enteredCombat = false
-				local battleDuration = os.time() - battleStartTime - endOfCombat
-				for k, v in pairs(battlesHistory) do
-					if v.sequence == -1 or v.sequence == 999999 then
-						table.remove(battlesHistory, k)
-					end
-				end
-				pDPS(battleDuration, "COMBAT")
-				battleStartTime = 0
-				leftCombatTime = 0
-			end
-		end
-		-- Clean up the table
-		if battleStartTime > 0 then
-			parseCurrentBattle(currentTime - battleStartTime)
-		end
-		cleanTable()
-		workingTable = sortTable(damTable, 'combat')
-		if tempSettings.doActors and uiTime == 1 then actorsWorking = sortTable(actorsTable, 'party') end
-		if tempSettings.sortParty then
-			actorsWorking = actorsTable
-		end
-
-		mq.doevents()
-		mq.delay(5)
-		if tempSettings.sortParty then
-			uiTime = uiTime + 5
-			if uiTime >= 34 then
-				if tempSettings.doActors then actorsWorking = sortTable(actorsTable, 'party') end
-				uiTime = 0
-			end
+	local currentTime = os.time()
+	if currentTime - dpsStartTime >= settings.Options.dpsTimeSpanReportTimer then
+		local dur = currentTime - dpsStartTime
+		if settings.Options.dpsTimeSpanReport then
+			pDPS(dur, 'ALL')
 		end
 	end
+
+	if mq.TLO.Me.CombatState() ~= 'COMBAT' and enteredCombat then
+		if leftCombatTime == 0 then
+			leftCombatTime = os.time()
+		end
+
+		local endOfCombat = os.time() - leftCombatTime
+		if endOfCombat > settings.Options.battleDuration then
+			enteredCombat = false
+			local battleDuration = os.time() - battleStartTime - endOfCombat
+			for k, v in pairs(battlesHistory) do
+				if v.sequence == -1 or v.sequence == 999999 then
+					table.remove(battlesHistory, k)
+				end
+			end
+			pDPS(battleDuration, "COMBAT")
+			battleStartTime = 0
+			leftCombatTime = 0
+		end
+	end
+	-- Clean up the table
+	if battleStartTime > 0 then
+		parseCurrentBattle(currentTime - battleStartTime)
+	end
+	cleanTable()
+	workingTable = sortTable(damTable, 'combat')
+	if firstRun then
+		actorsWorking = sortTable(actorsTable, 'party')
+		firstRun = false
+	end
+
+	if tempSettings.sortParty then
+		actorsWorking = sortTable(actorsTable, 'party')
+	else
+		actorsWorking = actorsTable
+	end
+
+	mq.doevents()
+	-- mq.delay(5)
+	-- if tempSettings.sortParty then
+	-- 	uiTime = uiTime + 5
+	-- 	if uiTime >= 34 then
+	-- 		if tempSettings.doActors then actorsWorking = sortTable(actorsTable, 'party') end
+	-- 		uiTime = 0
+	-- 	end
+	-- end
 end
--- Make sure we are in game before running the script
+
+function Module.LocalLoop()
+	while Module.IsRunning do
+		Module.MainLoop()
+		mq.delay(1)
+	end
+end
+
 if mq.TLO.EverQuest.GameState() ~= "INGAME" then
-	printOutput("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script)
+	printf("\aw[\at%s\ax] \arNot in game, \ayTry again later...", script)
 	mq.exit()
 end
 
 Init()
-Loop()
+return Module
